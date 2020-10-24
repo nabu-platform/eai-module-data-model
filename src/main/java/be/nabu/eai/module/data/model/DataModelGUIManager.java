@@ -150,7 +150,16 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 								}
 								model.getConfig().getEntries().add(entry);
 								MainController.getInstance().setChanged();
-								canvas.getChildren().add(draw(model, entry, locked, focused, drawn, shapes));
+								VBox draw = draw(model, entry, locked, focused, drawn, shapes);
+								canvas.getChildren().add(draw);
+								drawShapes(model, drawn, shapes, canvas, model.getConfig().getEntries());
+								
+								// bring new guy to the front
+								toFront(entry, draw, shapes);
+								
+								// and expand it?
+//								Tree<?> tree = (Tree<?>) draw.lookup(".treeContainer");
+//								tree.getRootCell().expandAll(1);
 							}
 						}
 					}
@@ -175,7 +184,6 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
 			@Override
 			public void handle(KeyEvent arg0) {
-				System.out.println("hitting key: " + arg0.getCode());
 				if (focused.get() != null && arg0.getCode() == KeyCode.DELETE) {
 					delete(model, canvas, focused, drawn, shapes);
 				}
@@ -192,30 +200,40 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				canvas.getChildren().add(draw);
 			}
 			
-			// after we draw them all, we start to draw the lines
-			for (DataModelEntry entry : entries) {
-				if (!(entry.getType() instanceof ComplexType)) {
-					continue;
+			drawShapes(model, drawn, shapes, canvas, entries);
+		}
+	}
+
+	private void drawShapes(DataModelArtifact model, Map<String, VBox> drawn, Map<String, List<Node>> shapes, AnchorPane canvas, List<DataModelEntry> entries) {
+		// clear all shapes, we'll redraw them, too much work to delta this stuff
+		for (List<Node> nodes : shapes.values()) {
+			canvas.getChildren().removeAll(nodes);
+		}
+		shapes.clear();
+		
+		// after we draw them all, we start to draw the lines
+		for (DataModelEntry entry : entries) {
+			if (!(entry.getType() instanceof ComplexType)) {
+				continue;
+			}
+			if (entry.getType().getSuperType() != null) {
+				Type superType = entry.getType().getSuperType();
+				// if we drew the supertype, add a line
+				if (superType instanceof DefinedType && drawn.containsKey(((DefinedType) superType).getId())) {
+					String superId = ((DefinedType) superType).getId();
+					drawLine(drawn, shapes, canvas, entry, superId, null, null, "indexQueryLine");
 				}
-				if (entry.getType().getSuperType() != null) {
-					Type superType = entry.getType().getSuperType();
-					// if we drew the supertype, add a line
-					if (superType instanceof DefinedType && drawn.containsKey(((DefinedType) superType).getId())) {
-						String superId = ((DefinedType) superType).getId();
-						drawLine(drawn, shapes, canvas, entry, superId, null, null, "indexQueryLine");
-					}
-				}
-				for (Element<?> element : JDBCUtils.getFieldsInTable((ComplexType) entry.getType())) {
-					Value<String> property = element.getProperty(ForeignKeyProperty.getInstance());
-					if (property != null && property.getValue() != null) {
-						String toId = property.getValue().split(":")[0];
-						if (drawn.containsKey(toId)) {
-							String fromPath = entry.getType().getName() + "/" + element.getName();
-							String toPath = ((DefinedType) model.getRepository().resolve(toId)).getName() + "/" + property.getValue().split(":")[1];
-							fromPath = element.getName();
-							toPath = property.getValue().split(":")[1];
-							drawLine(drawn, shapes, canvas, entry, toId, fromPath, toPath, "maskLine");
-						}
+			}
+			for (Element<?> element : JDBCUtils.getFieldsInTable((ComplexType) entry.getType())) {
+				Value<String> property = element.getProperty(ForeignKeyProperty.getInstance());
+				if (property != null && property.getValue() != null) {
+					String toId = property.getValue().split(":")[0];
+					if (drawn.containsKey(toId)) {
+						String fromPath = entry.getType().getName() + "/" + element.getName();
+						String toPath = ((DefinedType) model.getRepository().resolve(toId)).getName() + "/" + property.getValue().split(":")[1];
+						fromPath = element.getName();
+						toPath = property.getValue().split(":")[1];
+						drawLine(drawn, shapes, canvas, entry, toId, fromPath, toPath, "maskLine");
 					}
 				}
 			}
