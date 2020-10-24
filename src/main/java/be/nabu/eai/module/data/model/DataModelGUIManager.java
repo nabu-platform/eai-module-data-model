@@ -2,7 +2,9 @@ package be.nabu.eai.module.data.model;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.components.RepositoryBrowser;
@@ -13,22 +15,30 @@ import be.nabu.eai.developer.util.EAIDeveloperUtils;
 import be.nabu.eai.developer.util.ElementClipboardHandler;
 import be.nabu.eai.developer.util.ElementSelectionListener;
 import be.nabu.eai.developer.util.ElementTreeItem;
+import be.nabu.eai.developer.util.ElementTreeItem.ChildSelector;
+import be.nabu.eai.developer.util.EAIDeveloperUtils.Endpoint;
+import be.nabu.eai.developer.util.EAIDeveloperUtils.EndpointPicker;
 import be.nabu.eai.module.types.structure.StructureGUIManager;
 import be.nabu.eai.repository.resources.RepositoryEntry;
 import be.nabu.jfx.control.tree.Tree;
+import be.nabu.jfx.control.tree.TreeCell;
 import be.nabu.jfx.control.tree.drag.TreeDragDrop;
 import be.nabu.libs.artifacts.api.Artifact;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
+import be.nabu.libs.services.jdbc.JDBCUtils;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.api.DefinedType;
 import be.nabu.libs.types.api.Element;
+import be.nabu.libs.types.api.Type;
 import be.nabu.libs.types.base.RootElement;
+import be.nabu.libs.types.properties.ForeignKeyProperty;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
+import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
@@ -38,12 +48,16 @@ import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.Dragboard;
+import javafx.scene.input.KeyCode;
+import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseEvent;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.Line;
+import javafx.scene.shape.Shape;
 
 public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfiguration, DataModelArtifact> {
 
@@ -86,9 +100,13 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		VBox.setVgrow(scroll, Priority.ALWAYS);
 		
 		BooleanProperty locked = controller.hasLock(model.getId());
+		ObjectProperty<HBox> focused = new SimpleObjectProperty<HBox>();
+		Map<String, VBox> drawn = new HashMap<String, VBox>();
+		Map<String, List<Node>> shapes = new HashMap<String, List<Node>>();
 		
 		AnchorPane canvas = new AnchorPane();
 		scroll.setContent(canvas);
+		canvas.minHeightProperty().bind(scroll.heightProperty().subtract(25));
 		
 		canvas.addEventHandler(DragEvent.DRAG_OVER, new EventHandler<DragEvent>() {
 			@Override
@@ -132,8 +150,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 								}
 								model.getConfig().getEntries().add(entry);
 								MainController.getInstance().setChanged();
-								// redraw to include new one...
-								display(controller, pane, model);
+								canvas.getChildren().add(draw(model, entry, locked, focused, drawn, shapes));
 							}
 						}
 					}
@@ -147,119 +164,271 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		
 		total.getChildren().addAll(buttons, scroll);
 		
-		ObjectProperty<HBox> focused = new SimpleObjectProperty<HBox>();
+		delete.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+			@Override
+			public void handle(ActionEvent arg0) {
+				if (focused.get() != null) {
+					delete(model, canvas, focused, drawn, shapes);
+				}
+			}
+		});
+		canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+			@Override
+			public void handle(KeyEvent arg0) {
+				System.out.println("hitting key: " + arg0.getCode());
+				if (focused.get() != null && arg0.getCode() == KeyCode.DELETE) {
+					delete(model, canvas, focused, drawn, shapes);
+				}
+			}
+		});
+		
 		List<DataModelEntry> entries = model.getConfig().getEntries();
 		if (entries != null) {
 			for (DataModelEntry entry : entries) {
 				if (!(entry.getType() instanceof ComplexType)) {
 					continue;
 				}
-				try {
-					VBox child = new VBox();
-					// save the entry for easy removal etc
-					child.setUserData(entry);
-					// borrowing from blox...
-					child.getStyleClass().add("invokeWrapper");
-					HBox name = new HBox();
-					name.getStyleClass().add("invokeName");
-					
-					// the name is both for clarification and as a select/drag target!
-					Label nameLabel = new Label(entry.getType().getId());
-					nameLabel.getStyleClass().add("invokeServiceName");
-					nameLabel.setPadding(new Insets(5));
-					name.getChildren().add(nameLabel);
-					
-					child.getStyleClass().add("service");
-					EventHandler<MouseEvent> clickHandler = new EventHandler<MouseEvent>() {
-						@Override
-						public void handle(MouseEvent arg0) {
-							if (focused.get() != null) {
-								focused.get().getStyleClass().remove("selectedInvoke");
-							}
-							child.toFront();
-							name.getStyleClass().add("selectedInvoke");
-							focused.set(name);
-						}
-					};
-					child.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
-					
-					child.getChildren().add(name);
-					
-					StructureGUIManager structureGUIManager = new StructureGUIManager();
-					structureGUIManager.setActualId(model.getId());
-					// not doing inline editing atm as the menus are too big
-					// entry.getType() instanceof Structure
-					
-					Tree<Element<?>> display = new Tree<Element<?>>(new ElementMarshallable(), null, StructureGUIManager.newCellDescriptor());
-					EAIDeveloperUtils.addElementExpansionHandler(display);
-					display.setClipboardHandler(new ElementClipboardHandler(display, false));
-					display.setReadOnly(true);
-					display.rootProperty().set(new ElementTreeItem(new RootElement((ComplexType) entry.getType()), null, false, false));
-					display.getTreeCell(display.rootProperty().get()).expandedProperty().set(false);
-					display.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
-					
-					child.getChildren().add(display);
-					
-//					Tree<Element<?>> display = structureGUIManager.display(controller, child, new RootElementWithPush((ComplexType) entry.getType(), true), entry.getType() instanceof Structure, false);
-					display.setClipboardHandler(new ElementClipboardHandler(display, false));
-					display.getRootCell().getNode().getStyleClass().add("invokeTree");
-					
-					ElementSelectionListener elementSelectionListener = new ElementSelectionListener(controller, false);
-					elementSelectionListener.setActualId(entry.getType().getId());
-					display.getSelectionModel().selectedItemProperty().addListener(elementSelectionListener);
-					
-					// doesn't work in this context? the invoke wrapper isn't using it either
-					display.prefWidthProperty().unbind();
-					display.prefHeightProperty().unbind();
-					
-					display.resize();
-					display.getStyleClass().add("treeContainer");
-					display.getStyleClass().add("interface");
-					display.getStyleClass().add("interfaceContainer");
-					
-					// initial resize won't work?
-					display.setPrefWidth(100);
-					
-//					display.getTreeCell(display.rootProperty().get()).expandAll(1);
-//					child.setManaged(false);
-					canvas.getChildren().add(child);
-//					child.relocate(entry.getX(), entry.getY());
-					child.setLayoutX(entry.getX());
-					child.setLayoutY(entry.getY());
-					
-					MovablePane makeMovable = MovablePane.makeMovable(child, locked);
-					makeMovable.xProperty().addListener(new ChangeListener<Number>() {
-						@Override
-						public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
-							entry.setX(newValue.intValue());
-							MainController.getInstance().setChanged();
-						}
-					});
-					makeMovable.yProperty().addListener(new ChangeListener<Number>() {
-						@Override
-						public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
-							entry.setY(newValue.intValue());
-							MainController.getInstance().setChanged();
-						}
-					});
-					
-					// hide buttons and stuff
-					Node lookup = child.lookup(".structure-all-buttons");
-					if (lookup != null) {
-						lookup.setVisible(false);
-						lookup.setManaged(false);
+				VBox draw = draw(model, entry, locked, focused, drawn, shapes);
+				canvas.getChildren().add(draw);
+			}
+			
+			// after we draw them all, we start to draw the lines
+			for (DataModelEntry entry : entries) {
+				if (!(entry.getType() instanceof ComplexType)) {
+					continue;
+				}
+				if (entry.getType().getSuperType() != null) {
+					Type superType = entry.getType().getSuperType();
+					// if we drew the supertype, add a line
+					if (superType instanceof DefinedType && drawn.containsKey(((DefinedType) superType).getId())) {
+						String superId = ((DefinedType) superType).getId();
+						drawLine(drawn, shapes, canvas, entry, superId, null, null, "indexQueryLine");
 					}
-					lookup = child.lookup(".structure-move-buttons");
-					if (lookup != null) {
-						lookup.setVisible(false);
-						lookup.setManaged(false);
+				}
+				for (Element<?> element : JDBCUtils.getFieldsInTable((ComplexType) entry.getType())) {
+					Value<String> property = element.getProperty(ForeignKeyProperty.getInstance());
+					if (property != null && property.getValue() != null) {
+						String toId = property.getValue().split(":")[0];
+						if (drawn.containsKey(toId)) {
+							String fromPath = entry.getType().getName() + "/" + element.getName();
+							String toPath = ((DefinedType) model.getRepository().resolve(toId)).getName() + "/" + property.getValue().split(":")[1];
+							fromPath = element.getName();
+							toPath = property.getValue().split(":")[1];
+							drawLine(drawn, shapes, canvas, entry, toId, fromPath, toPath, "maskLine");
+						}
 					}
-				} 
-				catch (Exception e) {
-					controller.notify(e);
 				}
 			}
 		}
+	}
+
+	private void drawLine(Map<String, VBox> drawn, Map<String, List<Node>> shapes, AnchorPane canvas, DataModelEntry entry, String toId, String fromCellPath, String toCellPath, String style) {
+		Tree fromTree = (Tree<?>) drawn.get(entry.getType().getId()).lookup(".treeContainer");
+		Tree toTree = (Tree<?>) drawn.get(toId).lookup(".treeContainer");
+		
+		TreeCell<?> fromCell = fromCellPath == null ? fromTree.getRootCell() : fromTree.getTreeCell(fromTree.resolve(fromCellPath));
+		TreeCell<?> toCell = toCellPath == null ? toTree.getRootCell() : toTree.getTreeCell(toTree.resolve(toCellPath));
+		
+		Line line = getLine(drawn, entry.getType().getId(), toId, fromCell, toCell);
+		List<Shape> arrow1 = EAIDeveloperUtils.drawArrow(line, 0.5, 15d);
+		
+		// again borrow styling from blox
+		line.getStyleClass().add(style);
+		
+		if (style.equals("maskLine")) {
+			line.getStrokeDashArray().addAll(10d, 5d, 15d, 5d, 20d);
+			line.setStrokeDashOffset(0);
+		}
+		
+		for (Shape shape : arrow1) {
+			shape.getStyleClass().add(style);	
+		}
+		
+		if (!shapes.containsKey(entry.getType().getId())) {
+			shapes.put(entry.getType().getId(), new ArrayList<Node>());
+		}
+		shapes.get(entry.getType().getId()).add(line);
+		shapes.get(entry.getType().getId()).addAll(arrow1);
+		
+		// add them to both
+		if (!shapes.containsKey(toId)) {
+			shapes.put(toId, new ArrayList<Node>());
+		}
+		shapes.get(toId).add(line);
+		shapes.get(toId).addAll(arrow1);
+		
+		canvas.getChildren().addAll(line);
+		canvas.getChildren().addAll(arrow1);
+	}
+
+	private void toFront(DataModelEntry entry, VBox child, Map<String, List<Node>> shapes) {
+		for (List<Node> nodes : shapes.values()) {
+			for (Node node : nodes) {
+				node.toFront();
+			}
+		}
+		child.toFront();
+		// any shapes related to this child should be front and center
+		List<Node> list = shapes.get(entry.getType().getId());
+		if (list != null) {
+			for (Node node : list) {
+				node.toFront();
+			}
+		}
+	}
+	
+	private VBox draw(DataModelArtifact model, DataModelEntry entry, BooleanProperty locked, ObjectProperty<HBox> focused, Map<String, VBox> drawn, Map<String, List<Node>> shapes) {
+		try {
+			VBox child = new VBox();
+			drawn.put(entry.getType().getId(), child);
+			// save the entry for easy removal etc
+			child.setUserData(entry);
+			// borrowing from blox...
+			child.getStyleClass().add("invokeWrapper");
+			HBox name = new HBox();
+			name.getStyleClass().add("invokeName");
+			name.setUserData(entry);
+			
+			// the name is both for clarification and as a select/drag target!
+			Label nameLabel = new Label(entry.getType().getId());
+			nameLabel.getStyleClass().add("invokeServiceName");
+			nameLabel.setPadding(new Insets(5));
+			name.getChildren().add(nameLabel);
+			
+			child.getStyleClass().add("service");
+			EventHandler<MouseEvent> clickHandler = new EventHandler<MouseEvent>() {
+				@Override
+				public void handle(MouseEvent arg0) {
+					if (focused.get() != null) {
+						focused.get().getStyleClass().remove("selectedInvoke");
+					}
+					toFront(entry, child, shapes);
+					name.getStyleClass().add("selectedInvoke");
+					focused.set(name);
+				}
+			};
+			child.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
+			
+			child.getChildren().add(name);
+			
+			StructureGUIManager structureGUIManager = new StructureGUIManager();
+			structureGUIManager.setActualId(model.getId());
+			// not doing inline editing atm as the menus are too big
+			// entry.getType() instanceof Structure
+			
+			Tree<Element<?>> display = new Tree<Element<?>>(new ElementMarshallable(), null, StructureGUIManager.newCellDescriptor());
+			EAIDeveloperUtils.addElementExpansionHandler(display);
+			display.setClipboardHandler(new ElementClipboardHandler(display, false));
+			display.setReadOnly(true);
+			ElementTreeItem elementTreeItem = new ElementTreeItem(new RootElement((ComplexType) entry.getType()), null, false, false);
+			elementTreeItem.setChildSelector(new ChildSelector() {
+				@Override
+				public List<Element<?>> getChildren(ComplexType type) {
+					return JDBCUtils.getFieldsInTable(type);
+				}
+			});
+			
+			display.rootProperty().set(elementTreeItem);
+			display.getTreeCell(display.rootProperty().get()).expandedProperty().set(false);
+			display.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
+			
+			child.getChildren().add(display);
+			
+//					Tree<Element<?>> display = structureGUIManager.display(controller, child, new RootElementWithPush((ComplexType) entry.getType(), true), entry.getType() instanceof Structure, false);
+			display.setClipboardHandler(new ElementClipboardHandler(display, false));
+			display.getRootCell().getNode().getStyleClass().add("invokeTree");
+			
+			ElementSelectionListener elementSelectionListener = new ElementSelectionListener(MainController.getInstance(), false);
+			elementSelectionListener.setActualId(entry.getType().getId());
+			display.getSelectionModel().selectedItemProperty().addListener(elementSelectionListener);
+			
+			// doesn't work in this context? the invoke wrapper isn't using it either
+			display.prefWidthProperty().unbind();
+			display.prefHeightProperty().unbind();
+			
+			display.resize();
+			display.getStyleClass().add("treeContainer");
+			display.getStyleClass().add("interface");
+			display.getStyleClass().add("interfaceContainer");
+			
+			// initial resize won't work?
+			display.setPrefWidth(100);
+			
+			display.minWidthProperty().unbind();
+			display.minWidthProperty().bind(name.widthProperty());
+			
+			child.setLayoutX(entry.getX());
+			child.setLayoutY(entry.getY());
+			
+			MovablePane makeMovable = MovablePane.makeMovable(child, locked);
+			makeMovable.xProperty().addListener(new ChangeListener<Number>() {
+				@Override
+				public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
+					entry.setX(newValue.intValue());
+					MainController.getInstance().setChanged();
+				}
+			});
+			makeMovable.yProperty().addListener(new ChangeListener<Number>() {
+				@Override
+				public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
+					entry.setY(newValue.intValue());
+					MainController.getInstance().setChanged();
+				}
+			});
+			
+			// hide buttons and stuff
+			Node lookup = child.lookup(".structure-all-buttons");
+			if (lookup != null) {
+				lookup.setVisible(false);
+				lookup.setManaged(false);
+			}
+			lookup = child.lookup(".structure-move-buttons");
+			if (lookup != null) {
+				lookup.setVisible(false);
+				lookup.setManaged(false);
+			}
+			return child;
+		} 
+		catch (Exception e) {
+			MainController.getInstance().notify(e);
+		}
+		return null;
+	}
+	
+	private void delete(DataModelArtifact model, AnchorPane canvas, ObjectProperty<HBox> focused, Map<String, VBox> drawn, Map<String, List<Node>> shapes) {
+		DataModelEntry entry = (DataModelEntry) focused.get().getUserData();
+		model.getConfig().getEntries().remove(entry);
+		MainController.getInstance().setChanged();
+		focused.set(null);
+		VBox remove = drawn.remove(entry.getType().getId());
+		canvas.getChildren().remove(remove);
+		
+		List<Node> removed = shapes.remove(entry.getType().getId());
+		if (removed != null) {
+			canvas.getChildren().removeAll(removed);
+		}
+	}
+	
+	public static Line getLine(Map<String, VBox> drawn, String fromId, String toId, TreeCell<?> from, TreeCell<?> to) {
+		Line line = new Line();
+		
+		Endpoint fromOrigin = new Endpoint(drawn.get(fromId).layoutXProperty(), drawn.get(fromId).layoutYProperty());
+		Endpoint fromLeft = new Endpoint(from.leftAnchorXProperty().add(drawn.get(fromId).layoutXProperty()), from.leftAnchorYProperty().add(drawn.get(fromId).layoutYProperty()));
+		Endpoint fromRight = new Endpoint(from.rightAnchorXProperty().add(drawn.get(fromId).layoutXProperty()), from.rightAnchorYProperty().add(drawn.get(fromId).layoutYProperty()));
+		
+		Endpoint toOrigin = new Endpoint(drawn.get(toId).layoutXProperty(), drawn.get(toId).layoutYProperty());
+		Endpoint toLeft = new Endpoint(to.leftAnchorXProperty().add(drawn.get(toId).layoutXProperty()), to.leftAnchorYProperty().add(drawn.get(toId).layoutYProperty()));
+		Endpoint toRight = new Endpoint(to.rightAnchorXProperty().add(drawn.get(toId).layoutXProperty()), to.rightAnchorYProperty().add(drawn.get(toId).layoutYProperty()));
+		
+		EndpointPicker endpointPicker = new EndpointPicker(toOrigin, fromLeft, fromRight);
+		line.startXProperty().bind(endpointPicker.xProperty());
+		line.startYProperty().bind(endpointPicker.yProperty());
+		
+		endpointPicker = new EndpointPicker(fromOrigin, toLeft, toRight);
+		line.endXProperty().bind(endpointPicker.xProperty());
+		line.endYProperty().bind(endpointPicker.yProperty());
+		
+		return line;
 	}
 
 }
