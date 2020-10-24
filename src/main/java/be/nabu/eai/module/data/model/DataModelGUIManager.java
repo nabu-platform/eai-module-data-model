@@ -1,15 +1,18 @@
 package be.nabu.eai.module.data.model;
 
 import java.io.IOException;
-import java.text.ParseException;
 import java.util.ArrayList;
 import java.util.List;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.components.RepositoryBrowser;
 import be.nabu.eai.developer.managers.base.BaseJAXBGUIManager;
+import be.nabu.eai.developer.managers.util.ElementMarshallable;
 import be.nabu.eai.developer.managers.util.MovablePane;
-import be.nabu.eai.developer.managers.util.RootElementWithPush;
+import be.nabu.eai.developer.util.EAIDeveloperUtils;
+import be.nabu.eai.developer.util.ElementClipboardHandler;
+import be.nabu.eai.developer.util.ElementSelectionListener;
+import be.nabu.eai.developer.util.ElementTreeItem;
 import be.nabu.eai.module.types.structure.StructureGUIManager;
 import be.nabu.eai.repository.resources.RepositoryEntry;
 import be.nabu.jfx.control.tree.Tree;
@@ -17,34 +20,30 @@ import be.nabu.jfx.control.tree.drag.TreeDragDrop;
 import be.nabu.libs.artifacts.api.Artifact;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
-import be.nabu.libs.services.api.DefinedService;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.api.DefinedType;
 import be.nabu.libs.types.api.Element;
-import be.nabu.libs.types.structure.Structure;
-import javafx.scene.layout.AnchorPane;
-import javafx.scene.layout.HBox;
-import javafx.scene.transform.Transform;
-import javafx.util.Duration;
-import javafx.animation.KeyFrame;
-import javafx.animation.Timeline;
-import javafx.application.Platform;
+import be.nabu.libs.types.base.RootElement;
 import javafx.beans.property.BooleanProperty;
+import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
 import javafx.event.EventHandler;
-import javafx.geometry.Bounds;
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.scene.Node;
 import javafx.scene.control.Button;
+import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.Dragboard;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.input.TransferMode;
-import javafx.event.ActionEvent;
-import javafx.scene.layout.VBox;
+import javafx.scene.layout.AnchorPane;
+import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.VBox;
 
 public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfiguration, DataModelArtifact> {
 
@@ -70,20 +69,26 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 	@Override
 	public void display(MainController controller, AnchorPane pane, DataModelArtifact model) {
 		pane.getChildren().clear();
+		
+		VBox total = new VBox();
+		AnchorPane.setBottomAnchor(total, 0d);
+		AnchorPane.setLeftAnchor(total, 0d);
+		AnchorPane.setRightAnchor(total, 0d);
+		AnchorPane.setTopAnchor(total, 0d);
+		
+		total.prefWidthProperty().bind(pane.widthProperty());
+		total.prefHeightProperty().bind(pane.heightProperty());
+		pane.getChildren().add(total);
+		
 		ScrollPane scroll = new ScrollPane();
-		AnchorPane.setBottomAnchor(scroll, 0d);
-		AnchorPane.setLeftAnchor(scroll, 0d);
-		AnchorPane.setRightAnchor(scroll, 0d);
-		AnchorPane.setTopAnchor(scroll, 0d);
-		pane.getChildren().add(scroll);
 		scroll.setFitToWidth(true);
 		
+		VBox.setVgrow(scroll, Priority.ALWAYS);
+		
 		BooleanProperty locked = controller.hasLock(model.getId());
-		VBox total = new VBox();
-		total.prefHeightProperty().bind(scroll.heightProperty().subtract(25));
 		
 		AnchorPane canvas = new AnchorPane();
-		VBox.setVgrow(canvas, Priority.ALWAYS);
+		scroll.setContent(canvas);
 		
 		canvas.addEventHandler(DragEvent.DRAG_OVER, new EventHandler<DragEvent>() {
 			@Override
@@ -140,9 +145,9 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		Button delete = new Button("Delete");
 		buttons.getChildren().add(delete);
 		
-		total.getChildren().addAll(buttons, canvas);
+		total.getChildren().addAll(buttons, scroll);
 		
-		scroll.setContent(total);
+		ObjectProperty<HBox> focused = new SimpleObjectProperty<HBox>();
 		List<DataModelEntry> entries = model.getConfig().getEntries();
 		if (entries != null) {
 			for (DataModelEntry entry : entries) {
@@ -150,50 +155,105 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					continue;
 				}
 				try {
-					AnchorPane child = new AnchorPane();
+					VBox child = new VBox();
+					// save the entry for easy removal etc
+					child.setUserData(entry);
+					// borrowing from blox...
+					child.getStyleClass().add("invokeWrapper");
+					HBox name = new HBox();
+					name.getStyleClass().add("invokeName");
+					
+					// the name is both for clarification and as a select/drag target!
+					Label nameLabel = new Label(entry.getType().getId());
+					nameLabel.getStyleClass().add("invokeServiceName");
+					nameLabel.setPadding(new Insets(5));
+					name.getChildren().add(nameLabel);
+					
+					child.getStyleClass().add("service");
+					EventHandler<MouseEvent> clickHandler = new EventHandler<MouseEvent>() {
+						@Override
+						public void handle(MouseEvent arg0) {
+							if (focused.get() != null) {
+								focused.get().getStyleClass().remove("selectedInvoke");
+							}
+							child.toFront();
+							name.getStyleClass().add("selectedInvoke");
+							focused.set(name);
+						}
+					};
+					child.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
+					
+					child.getChildren().add(name);
+					
 					StructureGUIManager structureGUIManager = new StructureGUIManager();
 					structureGUIManager.setActualId(model.getId());
 					// not doing inline editing atm as the menus are too big
 					// entry.getType() instanceof Structure
-					Tree<Element<?>> display = structureGUIManager.display(controller, child, new RootElementWithPush((ComplexType) entry.getType(), true), entry.getType() instanceof Structure, false);
-					display.getTreeCell(display.rootProperty().get()).expandAll(1);
+					
+					Tree<Element<?>> display = new Tree<Element<?>>(new ElementMarshallable(), null, StructureGUIManager.newCellDescriptor());
+					EAIDeveloperUtils.addElementExpansionHandler(display);
+					display.setClipboardHandler(new ElementClipboardHandler(display, false));
+					display.setReadOnly(true);
+					display.rootProperty().set(new ElementTreeItem(new RootElement((ComplexType) entry.getType()), null, false, false));
+					display.getTreeCell(display.rootProperty().get()).expandedProperty().set(false);
+					display.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
+					
+					child.getChildren().add(display);
+					
+//					Tree<Element<?>> display = structureGUIManager.display(controller, child, new RootElementWithPush((ComplexType) entry.getType(), true), entry.getType() instanceof Structure, false);
+					display.setClipboardHandler(new ElementClipboardHandler(display, false));
+					display.getRootCell().getNode().getStyleClass().add("invokeTree");
+					
+					ElementSelectionListener elementSelectionListener = new ElementSelectionListener(controller, false);
+					elementSelectionListener.setActualId(entry.getType().getId());
+					display.getSelectionModel().selectedItemProperty().addListener(elementSelectionListener);
+					
+					// doesn't work in this context? the invoke wrapper isn't using it either
+					display.prefWidthProperty().unbind();
+					display.prefHeightProperty().unbind();
+					
+					display.resize();
+					display.getStyleClass().add("treeContainer");
+					display.getStyleClass().add("interface");
+					display.getStyleClass().add("interfaceContainer");
+					
+					// initial resize won't work?
+					display.setPrefWidth(100);
+					
+//					display.getTreeCell(display.rootProperty().get()).expandAll(1);
+//					child.setManaged(false);
+					canvas.getChildren().add(child);
+//					child.relocate(entry.getX(), entry.getY());
+					child.setLayoutX(entry.getX());
+					child.setLayoutY(entry.getY());
+					
 					MovablePane makeMovable = MovablePane.makeMovable(child, locked);
 					makeMovable.xProperty().addListener(new ChangeListener<Number>() {
 						@Override
 						public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
 							entry.setX(newValue.intValue());
+							MainController.getInstance().setChanged();
 						}
 					});
 					makeMovable.yProperty().addListener(new ChangeListener<Number>() {
 						@Override
 						public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
 							entry.setY(newValue.intValue());
+							MainController.getInstance().setChanged();
 						}
 					});
-					canvas.getChildren().add(child);
-					canvas.layout();
 					
-					new Timeline(
-						new KeyFrame(Duration.millis(100), new EventHandler<ActionEvent>() {
-							@Override
-							public void handle(ActionEvent arg0) {
-								Bounds boundsInLocal = display.getBoundsInLocal();
-								Node lookup = child.lookup(".structure-all-buttons");
-								if (lookup != null) {
-									lookup.setVisible(false);
-									lookup.setManaged(false);
-								}
-								lookup = child.lookup(".structure-move-buttons");
-								if (lookup != null) {
-									lookup.setVisible(false);
-									lookup.setManaged(false);
-								}
-								child.resize(boundsInLocal.getWidth(), boundsInLocal.getHeight());
-								child.setManaged(false);
-								child.relocate(entry.getX(), entry.getY());
-							}
-						})
-					).play();
+					// hide buttons and stuff
+					Node lookup = child.lookup(".structure-all-buttons");
+					if (lookup != null) {
+						lookup.setVisible(false);
+						lookup.setManaged(false);
+					}
+					lookup = child.lookup(".structure-move-buttons");
+					if (lookup != null) {
+						lookup.setVisible(false);
+						lookup.setManaged(false);
+					}
 				} 
 				catch (Exception e) {
 					controller.notify(e);
