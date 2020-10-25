@@ -323,15 +323,22 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					}
 				}
 			});
-			canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
-				@Override
-				public void handle(KeyEvent arg0) {
-					if (focused.get() != null && arg0.getCode() == KeyCode.DELETE) {
-						delete(model, canvas, focused, drawn, shapes);
+		}
+		
+		// defocus
+		canvas.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+			@Override
+			public void handle(MouseEvent arg0) {
+				if (!arg0.isConsumed()) {
+					if (focused.get() != null) {
+						focused.get().getStyleClass().remove("selectedInvoke");
+						focused.set(null);
+						toFront(null, null, shapes, drawn);
 					}
 				}
-			});
-		}
+			}
+		});
+		
 		export.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 			@Override
 			public void handle(ActionEvent arg0) {
@@ -348,6 +355,20 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				}
 				VBox draw = draw(model, entry, locked, focused, drawn, shapes);
 				canvas.getChildren().add(draw);
+
+				if (editable) {
+					draw.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+						@Override
+						public void handle(KeyEvent arg0) {
+							if (focused.get() != null && arg0.getCode() == KeyCode.DELETE) {
+								DataModelEntry entryToDelete = (DataModelEntry) focused.get().getUserData();
+								if (entryToDelete != null && entry.equals(entryToDelete)) {
+									delete(model, canvas, focused, drawn, shapes);
+								}
+							}
+						}
+					});
+				}
 			}
 			
 			drawShapes(model, drawn, shapes, canvas, entries);
@@ -540,6 +561,8 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					toFront(entry.getType(), child, shapes, drawn);
 					name.getStyleClass().add("selectedInvoke");
 					focused.set(name);
+					child.requestFocus();
+					arg0.consume();
 				}
 			};
 			child.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
