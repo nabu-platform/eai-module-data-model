@@ -1,10 +1,14 @@
 package be.nabu.eai.module.data.model;
 
+import java.awt.image.BufferedImage;
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+
+import javax.imageio.ImageIO;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.components.RepositoryBrowser;
@@ -38,14 +42,17 @@ import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
+import javafx.embed.swing.SwingFXUtils;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Insets;
 import javafx.geometry.Point2D;
 import javafx.scene.Node;
+import javafx.scene.SnapshotParameters;
 import javafx.scene.control.Button;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.image.WritableImage;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.Dragboard;
 import javafx.scene.input.KeyCode;
@@ -155,7 +162,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 								drawShapes(model, drawn, shapes, canvas, model.getConfig().getEntries());
 								
 								// bring new guy to the front
-								toFront(entry, draw, shapes);
+								toFront(entry.getType(), draw, shapes);
 								
 								// and expand it?
 //								Tree<?> tree = (Tree<?>) draw.lookup(".treeContainer");
@@ -168,8 +175,10 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		});
 		HBox buttons = new HBox();
 		buttons.setPadding(new Insets(10));
-		Button delete = new Button("Delete");
-		buttons.getChildren().add(delete);
+		Button delete = new Button("Delete Selected");
+		Button export = new Button("Copy to clipboard (PNG)");
+		
+		buttons.getChildren().addAll(export, delete);
 		
 		total.getChildren().addAll(buttons, scroll);
 		
@@ -179,6 +188,13 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				if (focused.get() != null) {
 					delete(model, canvas, focused, drawn, shapes);
 				}
+			}
+		});
+		export.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+			@Override
+			public void handle(ActionEvent arg0) {
+				WritableImage snapshot = canvas.snapshot(new SnapshotParameters(), null);
+				MainController.copy(snapshot);
 			}
 		});
 		canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
@@ -221,7 +237,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				// if we drew the supertype, add a line
 				if (superType instanceof DefinedType && drawn.containsKey(((DefinedType) superType).getId())) {
 					String superId = ((DefinedType) superType).getId();
-					drawLine(drawn, shapes, canvas, entry, superId, null, null, "indexQueryLine");
+					drawLine(drawn, shapes, canvas, entry.getType(), superId, null, null, "indexQueryLine");
 				}
 			}
 			for (Element<?> element : JDBCUtils.getFieldsInTable((ComplexType) entry.getType())) {
@@ -233,21 +249,21 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 						String toPath = ((DefinedType) model.getRepository().resolve(toId)).getName() + "/" + property.getValue().split(":")[1];
 						fromPath = element.getName();
 						toPath = property.getValue().split(":")[1];
-						drawLine(drawn, shapes, canvas, entry, toId, fromPath, toPath, "maskLine");
+						drawLine(drawn, shapes, canvas, entry.getType(), toId, fromPath, toPath, "maskLine");
 					}
 				}
 			}
 		}
 	}
 
-	private void drawLine(Map<String, VBox> drawn, Map<String, List<Node>> shapes, AnchorPane canvas, DataModelEntry entry, String toId, String fromCellPath, String toCellPath, String style) {
-		Tree fromTree = (Tree<?>) drawn.get(entry.getType().getId()).lookup(".treeContainer");
+	private void drawLine(Map<String, VBox> drawn, Map<String, List<Node>> shapes, AnchorPane canvas, DefinedType entry, String toId, String fromCellPath, String toCellPath, String style) {
+		Tree fromTree = (Tree<?>) drawn.get(entry.getId()).lookup(".treeContainer");
 		Tree toTree = (Tree<?>) drawn.get(toId).lookup(".treeContainer");
 		
 		TreeCell<?> fromCell = fromCellPath == null ? fromTree.getRootCell() : fromTree.getTreeCell(fromTree.resolve(fromCellPath));
 		TreeCell<?> toCell = toCellPath == null ? toTree.getRootCell() : toTree.getTreeCell(toTree.resolve(toCellPath));
 		
-		Line line = getLine(drawn, entry.getType().getId(), toId, fromCell, toCell);
+		Line line = getLine(drawn, entry.getId(), toId, fromCell, toCell);
 		List<Shape> arrow1 = EAIDeveloperUtils.drawArrow(line, 0.5, 15d);
 		
 		// again borrow styling from blox
@@ -262,11 +278,11 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			shape.getStyleClass().add(style);	
 		}
 		
-		if (!shapes.containsKey(entry.getType().getId())) {
-			shapes.put(entry.getType().getId(), new ArrayList<Node>());
+		if (!shapes.containsKey(entry.getId())) {
+			shapes.put(entry.getId(), new ArrayList<Node>());
 		}
-		shapes.get(entry.getType().getId()).add(line);
-		shapes.get(entry.getType().getId()).addAll(arrow1);
+		shapes.get(entry.getId()).add(line);
+		shapes.get(entry.getId()).addAll(arrow1);
 		
 		// add them to both
 		if (!shapes.containsKey(toId)) {
@@ -279,7 +295,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		canvas.getChildren().addAll(arrow1);
 	}
 
-	private void toFront(DataModelEntry entry, VBox child, Map<String, List<Node>> shapes) {
+	private void toFront(DefinedType entry, VBox child, Map<String, List<Node>> shapes) {
 		for (List<Node> nodes : shapes.values()) {
 			for (Node node : nodes) {
 				node.toFront();
@@ -287,7 +303,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		}
 		child.toFront();
 		// any shapes related to this child should be front and center
-		List<Node> list = shapes.get(entry.getType().getId());
+		List<Node> list = shapes.get(entry.getId());
 		if (list != null) {
 			for (Node node : list) {
 				node.toFront();
@@ -320,7 +336,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					if (focused.get() != null) {
 						focused.get().getStyleClass().remove("selectedInvoke");
 					}
-					toFront(entry, child, shapes);
+					toFront(entry.getType(), child, shapes);
 					name.getStyleClass().add("selectedInvoke");
 					focused.set(name);
 				}
