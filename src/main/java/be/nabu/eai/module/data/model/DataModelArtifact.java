@@ -83,4 +83,9 @@ public class DataModelArtifact extends JAXBArtifact<DataModelConfiguration> impl
 		return getRegistry().getElements(namespace);
 	}
 
+	@Override
+	public void setConfig(DataModelConfiguration config) {
+		super.setConfig(config);
+	}
+
 }

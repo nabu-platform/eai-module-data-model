@@ -3,8 +3,13 @@ package be.nabu.eai.module.data.model;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+
+import javax.xml.bind.JAXBContext;
+import javax.xml.bind.Marshaller;
+import javax.xml.bind.Unmarshaller;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.components.RepositoryBrowser;
@@ -19,6 +24,10 @@ import be.nabu.eai.developer.util.ElementSelectionListener;
 import be.nabu.eai.developer.util.ElementTreeItem;
 import be.nabu.eai.developer.util.ElementTreeItem.ChildSelector;
 import be.nabu.eai.module.types.structure.StructureGUIManager;
+import be.nabu.eai.repository.EAIResourceRepository;
+import be.nabu.eai.repository.api.Entry;
+import be.nabu.eai.repository.api.ResourceEntry;
+import be.nabu.eai.repository.jaxb.ArtifactXMLAdapter;
 import be.nabu.eai.repository.resources.RepositoryEntry;
 import be.nabu.jfx.control.tree.Tree;
 import be.nabu.jfx.control.tree.TreeCell;
@@ -26,16 +35,28 @@ import be.nabu.jfx.control.tree.drag.TreeDragDrop;
 import be.nabu.libs.artifacts.api.Artifact;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
+import be.nabu.libs.resources.ResourceReadableContainer;
+import be.nabu.libs.resources.ResourceUtils;
+import be.nabu.libs.resources.ResourceWritableContainer;
+import be.nabu.libs.resources.api.ReadableResource;
+import be.nabu.libs.resources.api.Resource;
+import be.nabu.libs.resources.api.WritableResource;
+import be.nabu.libs.resources.memory.MemoryDirectory;
 import be.nabu.libs.services.jdbc.JDBCUtils;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.api.DefinedType;
+import be.nabu.libs.types.api.DefinedTypeRegistry;
 import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.Type;
 import be.nabu.libs.types.base.RootElement;
 import be.nabu.libs.types.properties.ForeignKeyProperty;
+import be.nabu.utils.io.IOUtils;
+import be.nabu.utils.io.api.ByteBuffer;
+import be.nabu.utils.io.api.WritableContainer;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
+import javafx.beans.property.SimpleBooleanProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
@@ -69,6 +90,8 @@ import javafx.scene.shape.Shape;
 
 public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfiguration, DataModelArtifact> {
 
+	private boolean editable = true;
+	
 	public DataModelGUIManager() {
 		super("Data Model", DataModelArtifact.class, new DataModelManager(), DataModelConfiguration.class);
 	}
@@ -88,6 +111,76 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		return new DataModelArtifact(entry.getId(), entry.getContainer(), entry.getRepository());
 	}
 
+	public static void draw(DefinedTypeRegistry registry, AnchorPane pane) {
+		DataModelGUIManager dataModelGUIManager = new DataModelGUIManager();
+		dataModelGUIManager.setEditable(false);
+		dataModelGUIManager.display(MainController.getInstance(), pane, toModel(registry));
+	}
+	
+	// let's check that we have a saved version
+	public static DataModelArtifact toModel(DefinedTypeRegistry registry) {
+		DataModelArtifact model = new DataModelArtifact(registry.getId(), new MemoryDirectory(), EAIResourceRepository.getInstance());
+		Entry entry = EAIResourceRepository.getInstance().getEntry(registry.getId());
+		if (entry instanceof ResourceEntry) {
+			Resource child = ((ResourceEntry) entry).getContainer().getChild("data-model.xml");
+			if (child instanceof ReadableResource) {
+				DataModelConfiguration config = null;
+				try {
+					JAXBContext context = JAXBContext.newInstance(DataModelConfiguration.class);
+					Unmarshaller unmarshaller = context.createUnmarshaller();
+					unmarshaller.setAdapter(new ArtifactXMLAdapter(EAIResourceRepository.getInstance()));
+					ResourceReadableContainer container = new ResourceReadableContainer((ReadableResource) child);
+					try {
+						config = (DataModelConfiguration) unmarshaller.unmarshal(IOUtils.toInputStream(container));
+						model.setConfig(config);
+					}
+					finally {
+						container.close();
+					}
+				}
+				catch (Exception e) {
+					// ignore
+				}
+			}
+		}
+		if (model.getConfig().getEntries() == null) {
+			model.getConfig().setEntries(new ArrayList<DataModelEntry>());
+		}
+		Map<String, DataModelEntry> map = new HashMap<String, DataModelEntry>();
+		Iterator<DataModelEntry> iterator = model.getConfig().getEntries().iterator();
+		while (iterator.hasNext()) {
+			DataModelEntry next = iterator.next();
+			if (next == null || next.getType() == null) {
+				iterator.remove();
+			}
+			else {
+				map.put(next.getType().getId(), next);
+			}
+		}
+		
+		for (String namespace : registry.getNamespaces()) {
+			for (ComplexType complexType : registry.getComplexTypes(namespace)) {
+				if (complexType instanceof DefinedType) {
+					String id = ((DefinedType) complexType).getId();
+					// need to add it
+					if (!map.containsKey(id)) {
+						DataModelEntry single = new DataModelEntry();
+						single.setType((DefinedType) complexType);
+						model.getConfig().getEntries().add(single);
+					}
+					// remove it from the map so only the ones remain that are no longer in the registry
+					else {
+						map.remove(id);
+					}
+				}
+			}
+		}
+		
+		model.getConfig().getEntries().removeAll(map.values());
+		
+		return model;
+	}
+	
 	@Override
 	public void display(MainController controller, AnchorPane pane, DataModelArtifact model) {
 		pane.getChildren().clear();
@@ -116,79 +209,94 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		scroll.setContent(canvas);
 		canvas.minHeightProperty().bind(scroll.heightProperty().subtract(25));
 		
-		canvas.addEventHandler(DragEvent.DRAG_OVER, new EventHandler<DragEvent>() {
-			@Override
-			public void handle(DragEvent event) {
-				Dragboard dragboard = event.getDragboard();
-				if (dragboard != null) {
-					Object content = dragboard.getContent(TreeDragDrop.getDataFormat(RepositoryBrowser.getDataType(DefinedType.class)));
-					// this will be the path in the tree
-					if (content != null) {
-						String artifactId = controller.getRepositoryBrowser().getControl().resolve((String) content).itemProperty().get().getId();
-						if (artifactId != null) {
-							Artifact resolve = model.getRepository().resolve(artifactId);
-							if (resolve instanceof ComplexType) {
-								event.acceptTransferModes(TransferMode.MOVE);
-								event.consume();
-							}
-						}
-					}
-				}
-			}
-		});
-		canvas.addEventHandler(DragEvent.DRAG_DROPPED, new EventHandler<DragEvent>() {
-			@Override
-			public void handle(DragEvent event) {
-				Dragboard dragboard = event.getDragboard();
-				if (dragboard != null && !event.isDropCompleted() && !event.isConsumed()) {
-					Object content = dragboard.getContent(TreeDragDrop.getDataFormat(RepositoryBrowser.getDataType(DefinedType.class)));
-					// this will be the path in the tree
-					if (content != null) {
-						String artifactId = controller.getRepositoryBrowser().getControl().resolve((String) content).itemProperty().get().getId();
-						if (artifactId != null) {
-							Artifact resolve = model.getRepository().resolve(artifactId);
-							if (resolve instanceof ComplexType) {
-								DataModelEntry entry = new DataModelEntry();
-								entry.setType((DefinedType) resolve);
-								Point2D sceneToLocal = pane.sceneToLocal(event.getSceneX(), event.getSceneY());
-								entry.setX((int) sceneToLocal.getX());
-								entry.setY((int) sceneToLocal.getY());
-								if (model.getConfig().getEntries() == null) {
-									model.getConfig().setEntries(new ArrayList<DataModelEntry>());
+		if (editable) {
+			canvas.addEventHandler(DragEvent.DRAG_OVER, new EventHandler<DragEvent>() {
+				@Override
+				public void handle(DragEvent event) {
+					if (locked.get()) {
+						Dragboard dragboard = event.getDragboard();
+						if (dragboard != null) {
+							Object content = dragboard.getContent(TreeDragDrop.getDataFormat(RepositoryBrowser.getDataType(DefinedType.class)));
+							// this will be the path in the tree
+							if (content != null) {
+								String artifactId = controller.getRepositoryBrowser().getControl().resolve((String) content).itemProperty().get().getId();
+								if (artifactId != null) {
+									Artifact resolve = model.getRepository().resolve(artifactId);
+									if (resolve instanceof ComplexType) {
+										event.acceptTransferModes(TransferMode.MOVE);
+										event.consume();
+									}
 								}
-								model.getConfig().getEntries().add(entry);
-								MainController.getInstance().setChanged();
-								VBox draw = draw(model, entry, locked, focused, drawn, shapes);
-								canvas.getChildren().add(draw);
-								drawShapes(model, drawn, shapes, canvas, model.getConfig().getEntries());
-								
-								// bring new guy to the front
-								toFront(entry.getType(), draw, shapes);
-								
-								// and expand it?
-//								Tree<?> tree = (Tree<?>) draw.lookup(".treeContainer");
-//								tree.getRootCell().expandAll(1);
 							}
 						}
 					}
 				}
-			}
-		});
+			});
+			canvas.addEventHandler(DragEvent.DRAG_DROPPED, new EventHandler<DragEvent>() {
+				@Override
+				public void handle(DragEvent event) {
+					if (locked.get()) {
+						Dragboard dragboard = event.getDragboard();
+						if (dragboard != null && !event.isDropCompleted() && !event.isConsumed()) {
+							Object content = dragboard.getContent(TreeDragDrop.getDataFormat(RepositoryBrowser.getDataType(DefinedType.class)));
+							// this will be the path in the tree
+							if (content != null) {
+								String artifactId = controller.getRepositoryBrowser().getControl().resolve((String) content).itemProperty().get().getId();
+								if (artifactId != null) {
+									Artifact resolve = model.getRepository().resolve(artifactId);
+									if (resolve instanceof ComplexType) {
+										DataModelEntry entry = new DataModelEntry();
+										entry.setType((DefinedType) resolve);
+										Point2D sceneToLocal = pane.sceneToLocal(event.getSceneX(), event.getSceneY());
+										entry.setX((int) sceneToLocal.getX());
+										entry.setY((int) sceneToLocal.getY());
+										if (model.getConfig().getEntries() == null) {
+											model.getConfig().setEntries(new ArrayList<DataModelEntry>());
+										}
+										model.getConfig().getEntries().add(entry);
+										MainController.getInstance().setChanged();
+										VBox draw = draw(model, entry, locked, focused, drawn, shapes);
+										canvas.getChildren().add(draw);
+										drawShapes(model, drawn, shapes, canvas, model.getConfig().getEntries());
+										
+										// bring new guy to the front
+										toFront(entry.getType(), draw, shapes, drawn);
+										
+										// and expand it?
+		//								Tree<?> tree = (Tree<?>) draw.lookup(".treeContainer");
+		//								tree.getRootCell().expandAll(1);
+									}
+								}
+							}
+						}
+					}
+				}
+			});
+		}
 		HBox buttons = new HBox();
 		buttons.setAlignment(Pos.CENTER_LEFT);
 		buttons.setPadding(new Insets(10));
 		Button delete = new Button("Delete Selected");
 		Button export = new Button("Copy to clipboard (PNG)");
 		
+		delete.setDisable(!editable);
+		
 		ComboBox<DataModelType> combo = new ComboBox<DataModelType>();
 		combo.getItems().addAll(DataModelType.values());
-		combo.getSelectionModel().select(model.getConfig().getType());
+		combo.getSelectionModel().select(model.getConfig().getType() == null ? DataModelType.DATABASE : model.getConfig().getType());
+		
 		combo.getSelectionModel().selectedItemProperty().addListener(new ChangeListener<DataModelType>() {
 			@Override
 			public void changed(ObservableValue<? extends DataModelType> arg0, DataModelType arg1, DataModelType arg2) {
-				model.getConfig().setType(arg2);
-				MainController.getInstance().setChanged();
-				
+				if (locked.get()) {
+					model.getConfig().setType(arg2);
+					if (editable) {
+						MainController.getInstance().setChanged();
+					}
+					else {
+						persistLightly(model);
+					}
+				}
 				for (Node node : drawn.values()) {
 					Tree fromTree = (Tree<?>) node.lookup(".treeContainer");
 					// refresh the tree!
@@ -206,27 +314,29 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		
 		total.getChildren().addAll(buttons, scroll);
 		
-		delete.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
-			@Override
-			public void handle(ActionEvent arg0) {
-				if (focused.get() != null) {
-					delete(model, canvas, focused, drawn, shapes);
+		if (editable) {
+			delete.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+				@Override
+				public void handle(ActionEvent arg0) {
+					if (focused.get() != null) {
+						delete(model, canvas, focused, drawn, shapes);
+					}
 				}
-			}
-		});
+			});
+			canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+				@Override
+				public void handle(KeyEvent arg0) {
+					if (focused.get() != null && arg0.getCode() == KeyCode.DELETE) {
+						delete(model, canvas, focused, drawn, shapes);
+					}
+				}
+			});
+		}
 		export.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
 			@Override
 			public void handle(ActionEvent arg0) {
 				WritableImage snapshot = canvas.snapshot(new SnapshotParameters(), null);
 				MainController.copy(snapshot);
-			}
-		});
-		canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
-			@Override
-			public void handle(KeyEvent arg0) {
-				if (focused.get() != null && arg0.getCode() == KeyCode.DELETE) {
-					delete(model, canvas, focused, drawn, shapes);
-				}
 			}
 		});
 		
@@ -242,6 +352,8 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			
 			drawShapes(model, drawn, shapes, canvas, entries);
 		}
+		
+		toFront(null, null, shapes, drawn);
 	}
 
 	private void drawShapes(DataModelArtifact model, Map<String, VBox> drawn, Map<String, List<Node>> shapes, AnchorPane canvas, List<DataModelEntry> entries) {
@@ -351,18 +463,51 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		shapes.get(toId).add(toCircle);
 	}
 
-	private void toFront(DefinedType entry, VBox child, Map<String, List<Node>> shapes) {
+	private void toFront(DefinedType entry, VBox child, Map<String, List<Node>> shapes,  Map<String, VBox> drawn) {
+		// shapes to the back
 		for (List<Node> nodes : shapes.values()) {
 			for (Node node : nodes) {
-				node.toFront();
+				node.toBack();
+				// make partially translucent so as not to overcrowd
+				node.setOpacity(0.3);
 			}
 		}
-		child.toFront();
-		// any shapes related to this child should be front and center
-		List<Node> list = shapes.get(entry.getId());
-		if (list != null) {
-			for (Node node : list) {
-				node.toFront();
+
+		// if we have a child, make sure it and any shapes related to it are front and center
+		// we leave the drawn vboxes as is so you can play with the z-index yourself by clicking around
+		
+		if (child != null) {
+			child.toFront();
+			// any shapes related to this child should be front and center
+			List<Node> list = shapes.get(entry.getId());
+			if (list != null) {
+				for (Node node : list) {
+					node.toFront();
+					node.setOpacity(1);
+				}
+			}
+		}
+	}
+	
+	private void persistLightly(DataModelArtifact model) {
+		Entry entry = EAIResourceRepository.getInstance().getEntry(model.getId());
+		if (entry instanceof ResourceEntry) {
+			try {
+				Resource child = ResourceUtils.touch(((ResourceEntry) entry).getContainer(), "data-model.xml");
+				WritableContainer<ByteBuffer> writable = new ResourceWritableContainer((WritableResource) child);
+				try {
+					JAXBContext context = JAXBContext.newInstance(DataModelConfiguration.class);
+					Marshaller marshaller = context.createMarshaller();
+					marshaller.setProperty(Marshaller.JAXB_FORMATTED_OUTPUT, true);
+					marshaller.setAdapter(new ArtifactXMLAdapter(EAIResourceRepository.getInstance()));
+					marshaller.marshal(model.getConfig(), IOUtils.toOutputStream(writable));
+				}
+				finally {
+					writable.close();
+				}
+			}
+			catch (Exception e) {
+				MainController.getInstance().notify(e);
 			}
 		}
 	}
@@ -392,7 +537,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					if (focused.get() != null) {
 						focused.get().getStyleClass().remove("selectedInvoke");
 					}
-					toFront(entry.getType(), child, shapes);
+					toFront(entry.getType(), child, shapes, drawn);
 					name.getStyleClass().add("selectedInvoke");
 					focused.set(name);
 				}
@@ -449,20 +594,36 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			
 			child.setLayoutX(entry.getX());
 			child.setLayoutY(entry.getY());
+
+			// always make it movable to make it more readable
+			MovablePane makeMovable = MovablePane.makeMovable(child, new SimpleBooleanProperty(true));
 			
-			MovablePane makeMovable = MovablePane.makeMovable(child, locked);
 			makeMovable.xProperty().addListener(new ChangeListener<Number>() {
 				@Override
 				public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
-					entry.setX(newValue.intValue());
-					MainController.getInstance().setChanged();
+					if (locked.get()) {
+						entry.setX(newValue.intValue());
+						if (editable) {
+							MainController.getInstance().setChanged();
+						}
+						else {
+							persistLightly(model);
+						}
+					}
 				}
 			});
 			makeMovable.yProperty().addListener(new ChangeListener<Number>() {
 				@Override
 				public void changed(ObservableValue<? extends Number> observable, Number oldValue, Number newValue) {
-					entry.setY(newValue.intValue());
-					MainController.getInstance().setChanged();
+					if (locked.get()) {
+						entry.setY(newValue.intValue());
+						if (editable) {
+							MainController.getInstance().setChanged();
+						}
+						else {
+							persistLightly(model);
+						}
+					}
 				}
 			});
 			
@@ -519,6 +680,14 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		line.endYProperty().bind(endpointPicker.yProperty());
 		
 		return line;
+	}
+
+	public boolean isEditable() {
+		return editable;
+	}
+
+	public void setEditable(boolean editable) {
+		this.editable = editable;
 	}
 
 }
