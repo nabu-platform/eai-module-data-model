@@ -1,14 +1,10 @@
 package be.nabu.eai.module.data.model;
 
-import java.awt.image.BufferedImage;
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
-import javax.imageio.ImageIO;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.components.RepositoryBrowser;
@@ -16,12 +12,12 @@ import be.nabu.eai.developer.managers.base.BaseJAXBGUIManager;
 import be.nabu.eai.developer.managers.util.ElementMarshallable;
 import be.nabu.eai.developer.managers.util.MovablePane;
 import be.nabu.eai.developer.util.EAIDeveloperUtils;
+import be.nabu.eai.developer.util.EAIDeveloperUtils.Endpoint;
+import be.nabu.eai.developer.util.EAIDeveloperUtils.EndpointPicker;
 import be.nabu.eai.developer.util.ElementClipboardHandler;
 import be.nabu.eai.developer.util.ElementSelectionListener;
 import be.nabu.eai.developer.util.ElementTreeItem;
 import be.nabu.eai.developer.util.ElementTreeItem.ChildSelector;
-import be.nabu.eai.developer.util.EAIDeveloperUtils.Endpoint;
-import be.nabu.eai.developer.util.EAIDeveloperUtils.EndpointPicker;
 import be.nabu.eai.module.types.structure.StructureGUIManager;
 import be.nabu.eai.repository.resources.RepositoryEntry;
 import be.nabu.jfx.control.tree.Tree;
@@ -31,6 +27,7 @@ import be.nabu.libs.artifacts.api.Artifact;
 import be.nabu.libs.property.api.Property;
 import be.nabu.libs.property.api.Value;
 import be.nabu.libs.services.jdbc.JDBCUtils;
+import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexType;
 import be.nabu.libs.types.api.DefinedType;
 import be.nabu.libs.types.api.Element;
@@ -42,16 +39,19 @@ import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleObjectProperty;
 import javafx.beans.value.ChangeListener;
 import javafx.beans.value.ObservableValue;
-import javafx.embed.swing.SwingFXUtils;
 import javafx.event.ActionEvent;
 import javafx.event.EventHandler;
 import javafx.geometry.Insets;
+import javafx.geometry.Orientation;
 import javafx.geometry.Point2D;
+import javafx.geometry.Pos;
 import javafx.scene.Node;
 import javafx.scene.SnapshotParameters;
 import javafx.scene.control.Button;
+import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Separator;
 import javafx.scene.image.WritableImage;
 import javafx.scene.input.DragEvent;
 import javafx.scene.input.Dragboard;
@@ -175,11 +175,34 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			}
 		});
 		HBox buttons = new HBox();
+		buttons.setAlignment(Pos.CENTER_LEFT);
 		buttons.setPadding(new Insets(10));
 		Button delete = new Button("Delete Selected");
 		Button export = new Button("Copy to clipboard (PNG)");
 		
-		buttons.getChildren().addAll(export, delete);
+		ComboBox<DataModelType> combo = new ComboBox<DataModelType>();
+		combo.getItems().addAll(DataModelType.values());
+		combo.getSelectionModel().select(model.getConfig().getType());
+		combo.getSelectionModel().selectedItemProperty().addListener(new ChangeListener<DataModelType>() {
+			@Override
+			public void changed(ObservableValue<? extends DataModelType> arg0, DataModelType arg1, DataModelType arg2) {
+				model.getConfig().setType(arg2);
+				MainController.getInstance().setChanged();
+				
+				for (Node node : drawn.values()) {
+					Tree fromTree = (Tree<?>) node.lookup(".treeContainer");
+					// refresh the tree!
+					fromTree.refresh();
+				}
+			}
+		});
+		combo.disableProperty().bind(locked.not());
+		
+		Label viewLabel = new Label("View");
+		viewLabel.setPadding(new Insets(10, 10, 10, 0));
+		Separator separator = new Separator(Orientation.VERTICAL);
+		HBox.setMargin(separator, new Insets(0, 10, 0, 10));
+		buttons.getChildren().addAll(export, delete, separator, viewLabel, combo);
 		
 		total.getChildren().addAll(buttons, scroll);
 		
@@ -241,7 +264,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					drawLine(drawn, shapes, canvas, entry.getType(), superId, null, null, "indexQueryLine");
 				}
 			}
-			for (Element<?> element : JDBCUtils.getFieldsInTable((ComplexType) entry.getType())) {
+			for (Element<?> element : getElements(model.getConfig().getType(), (ComplexType) entry.getType())) {
 				Value<String> property = element.getProperty(ForeignKeyProperty.getInstance());
 				if (property != null && property.getValue() != null) {
 					String toId = property.getValue().split(":")[0];
@@ -254,6 +277,18 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					}
 				}
 			}
+		}
+	}
+	
+	public List<Element<?>> getElements(DataModelType model, ComplexType type) {
+		if (model == null || model == DataModelType.DATABASE) {
+			return JDBCUtils.getFieldsInTable(type);
+		}
+		else if (model == DataModelType.LOCAL) {
+			return TypeUtils.getLocalChildren(type);
+		}
+		else {
+			return new ArrayList<Element<?>>(TypeUtils.getAllChildren(type));
 		}
 	}
 
@@ -379,7 +414,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			elementTreeItem.setChildSelector(new ChildSelector() {
 				@Override
 				public List<Element<?>> getChildren(ComplexType type) {
-					return JDBCUtils.getFieldsInTable(type);
+					return getElements(model.getConfig().getType(), type);
 				}
 			});
 			
