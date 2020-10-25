@@ -63,6 +63,7 @@ import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.VBox;
+import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Shape;
 
@@ -270,7 +271,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		line.getStyleClass().add(style);
 		
 		if (style.equals("maskLine")) {
-			line.getStrokeDashArray().addAll(10d, 5d, 15d, 5d, 20d);
+			line.getStrokeDashArray().addAll(10d, 5d);
 			line.setStrokeDashOffset(0);
 		}
 		
@@ -293,6 +294,26 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		
 		canvas.getChildren().addAll(line);
 		canvas.getChildren().addAll(arrow1);
+		
+		Circle fromCircle = new Circle();
+		fromCircle.centerXProperty().bind(line.startXProperty());
+		fromCircle.centerYProperty().bind(line.startYProperty());
+		fromCircle.setRadius(2);
+		fromCircle.getStyleClass().addAll("connectionCircle", style);
+//		fromCircle.setManaged(false);
+		
+		Circle toCircle = new Circle();
+		toCircle.centerXProperty().bind(line.endXProperty());
+		toCircle.centerYProperty().bind(line.endYProperty());
+		toCircle.setRadius(2);
+		toCircle.getStyleClass().addAll("connectionCircle", style);
+//		toCircle.setManaged(false);
+		
+		canvas.getChildren().addAll(fromCircle, toCircle);
+		shapes.get(entry.getId()).add(fromCircle);
+		shapes.get(entry.getId()).add(toCircle);
+		shapes.get(toId).add(fromCircle);
+		shapes.get(toId).add(toCircle);
 	}
 
 	private void toFront(DefinedType entry, VBox child, Map<String, List<Node>> shapes) {
@@ -448,11 +469,11 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		
 		Endpoint fromOrigin = new Endpoint(drawn.get(fromId).layoutXProperty(), drawn.get(fromId).layoutYProperty());
 		Endpoint fromLeft = new Endpoint(from.leftAnchorXProperty().add(drawn.get(fromId).layoutXProperty()), from.leftAnchorYProperty().add(drawn.get(fromId).layoutYProperty()));
-		Endpoint fromRight = new Endpoint(from.rightAnchorXProperty().add(drawn.get(fromId).layoutXProperty()), from.rightAnchorYProperty().add(drawn.get(fromId).layoutYProperty()));
+		Endpoint fromRight = new Endpoint(from.rightAnchorXProperty().add(10).add(drawn.get(fromId).layoutXProperty()), from.rightAnchorYProperty().add(drawn.get(fromId).layoutYProperty()));
 		
 		Endpoint toOrigin = new Endpoint(drawn.get(toId).layoutXProperty(), drawn.get(toId).layoutYProperty());
 		Endpoint toLeft = new Endpoint(to.leftAnchorXProperty().add(drawn.get(toId).layoutXProperty()), to.leftAnchorYProperty().add(drawn.get(toId).layoutYProperty()));
-		Endpoint toRight = new Endpoint(to.rightAnchorXProperty().add(drawn.get(toId).layoutXProperty()), to.rightAnchorYProperty().add(drawn.get(toId).layoutYProperty()));
+		Endpoint toRight = new Endpoint(to.rightAnchorXProperty().add(10).add(drawn.get(toId).layoutXProperty()), to.rightAnchorYProperty().add(drawn.get(toId).layoutYProperty()));
 		
 		EndpointPicker endpointPicker = new EndpointPicker(toOrigin, fromLeft, fromRight);
 		line.startXProperty().bind(endpointPicker.xProperty());
