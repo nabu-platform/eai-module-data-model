@@ -629,9 +629,6 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 						if (editable) {
 							MainController.getInstance().setChanged();
 						}
-						else {
-							persistLightly(model);
-						}
 					}
 				}
 			});
@@ -643,12 +640,19 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 						if (editable) {
 							MainController.getInstance().setChanged();
 						}
-						else {
-							persistLightly(model);
-						}
 					}
 				}
 			});
+
+			// if not editable, we don't want to save continuously, only when you stop dragging
+			if (!editable) {
+				makeMovable.setDragDoneHandler(new EventHandler<DragEvent>() {
+					@Override
+					public void handle(DragEvent arg0) {
+						persistLightly(model);
+					}
+				});
+			}
 			
 			// hide buttons and stuff
 			Node lookup = child.lookup(".structure-all-buttons");
