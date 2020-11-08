@@ -13,9 +13,11 @@ import javax.xml.bind.Unmarshaller;
 
 import be.nabu.eai.developer.MainController;
 import be.nabu.eai.developer.components.RepositoryBrowser;
+import be.nabu.eai.developer.managers.base.BaseArtifactGUIInstance;
 import be.nabu.eai.developer.managers.base.BaseJAXBGUIManager;
 import be.nabu.eai.developer.managers.util.ElementMarshallable;
 import be.nabu.eai.developer.managers.util.MovablePane;
+import be.nabu.eai.developer.managers.util.RootElementWithPush;
 import be.nabu.eai.developer.util.EAIDeveloperUtils;
 import be.nabu.eai.developer.util.EAIDeveloperUtils.Endpoint;
 import be.nabu.eai.developer.util.EAIDeveloperUtils.EndpointPicker;
@@ -24,6 +26,7 @@ import be.nabu.eai.developer.util.ElementSelectionListener;
 import be.nabu.eai.developer.util.ElementTreeItem;
 import be.nabu.eai.developer.util.ElementTreeItem.ChildSelector;
 import be.nabu.eai.module.types.structure.StructureGUIManager;
+import be.nabu.eai.module.types.structure.StructureManager;
 import be.nabu.eai.repository.EAIResourceRepository;
 import be.nabu.eai.repository.api.Entry;
 import be.nabu.eai.repository.api.ResourceEntry;
@@ -51,6 +54,9 @@ import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.Type;
 import be.nabu.libs.types.base.RootElement;
 import be.nabu.libs.types.properties.ForeignKeyProperty;
+import be.nabu.libs.types.structure.DefinedStructure;
+import be.nabu.libs.types.structure.Structure;
+import be.nabu.libs.validator.api.Validation;
 import be.nabu.utils.io.IOUtils;
 import be.nabu.utils.io.api.ByteBuffer;
 import be.nabu.utils.io.api.WritableContainer;
@@ -91,6 +97,7 @@ import javafx.scene.shape.Shape;
 public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfiguration, DataModelArtifact> {
 
 	private boolean editable = true;
+	private boolean allowEditing = true;
 	
 	public DataModelGUIManager() {
 		super("Data Model", DataModelArtifact.class, new DataModelManager(), DataModelConfiguration.class);
@@ -533,6 +540,44 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		}
 	}
 	
+	@Override
+	protected BaseArtifactGUIInstance<DataModelArtifact> newGUIInstance(Entry entry) {
+		BaseArtifactGUIInstance<DataModelArtifact> instance = new BaseArtifactGUIInstance<DataModelArtifact>(this, entry) {
+			@Override
+			public List<Validation<?>> save() throws IOException {
+				List<Validation<?>> messages = super.save();
+				// save all related nodes in same folder
+				if (allowEditing) {
+					List<DataModelEntry> entries = getArtifact().getConfig().getEntries();
+					if (entries != null) {
+						for (DataModelEntry entry : entries) {
+							if (allowEditing(getArtifact(), entry)) {
+								List<Validation<?>> save = new StructureManager().save(
+									(ResourceEntry) getArtifact().getRepository().getEntry(((DefinedType) entry.getType()).getId()), 
+									(DefinedStructure) entry.getType()
+								);
+								if (save != null) {
+									messages.addAll(save);
+								}
+							}
+						}
+					}
+				}
+				return messages;
+			}
+		};
+		return instance;
+	}
+	
+	private boolean allowEditing(DataModelArtifact model, DataModelEntry entry) {
+		Entry repositoryEntry = entry.getType() instanceof DefinedType && entry.getType() instanceof Structure ? model.getRepository().getEntry(((DefinedType) entry.getType()).getId()) : null;
+		// only allow in folder itself (recursively)
+		if (repositoryEntry != null && repositoryEntry instanceof ResourceEntry && repositoryEntry.getId().startsWith(model.getId().replaceAll("[^.]+$", ""))) {
+			return true;
+		}
+		return false;
+	}
+
 	private VBox draw(DataModelArtifact model, DataModelEntry entry, BooleanProperty locked, ObjectProperty<HBox> focused, Map<String, VBox> drawn, Map<String, List<Node>> shapes) {
 		try {
 			VBox child = new VBox();
@@ -569,36 +614,59 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			
 			child.getChildren().add(name);
 			
+			child.getStyleClass().add("small");
+			
 			StructureGUIManager structureGUIManager = new StructureGUIManager();
 			structureGUIManager.setActualId(model.getId());
 			// not doing inline editing atm as the menus are too big
 			// entry.getType() instanceof Structure
 			
-			Tree<Element<?>> display = new Tree<Element<?>>(new ElementMarshallable(), null, StructureGUIManager.newCellDescriptor());
-			EAIDeveloperUtils.addElementExpansionHandler(display);
-			display.setClipboardHandler(new ElementClipboardHandler(display, false));
-			display.setReadOnly(true);
-			ElementTreeItem elementTreeItem = new ElementTreeItem(new RootElement((ComplexType) entry.getType()), null, false, false);
-			elementTreeItem.setChildSelector(new ChildSelector() {
-				@Override
-				public List<Element<?>> getChildren(ComplexType type) {
-					return getElements(model.getConfig().getType(), type);
+			Tree<Element<?>> display;
+			if (allowEditing) {
+				AnchorPane anchorPane = new AnchorPane();
+				
+				display = structureGUIManager.display(MainController.getInstance(), anchorPane, new RootElementWithPush((ComplexType) entry.getType(), true), 
+						entry.getType() instanceof Structure && allowEditing(model, entry), false);
+				
+				// hide buttons and stuff
+				Node lookup = anchorPane.lookup(".structure-all-buttons");
+				if (lookup != null) {
+//					lookup.setVisible(false);
+//					lookup.setManaged(false);
+					child.getChildren().add(lookup);
+					((HBox) lookup).setPadding(new Insets(0));
 				}
-			});
+				lookup = anchorPane.lookup(".structure-move-buttons");
+				if (lookup != null) {
+					lookup.setVisible(false);
+					lookup.setManaged(false);
+				}
+			}
+			else {
+				display = new Tree<Element<?>>(new ElementMarshallable(), null, StructureGUIManager.newCellDescriptor());
+				EAIDeveloperUtils.addElementExpansionHandler(display);
+				display.setClipboardHandler(new ElementClipboardHandler(display, false));
+				display.setReadOnly(true);
+				ElementTreeItem elementTreeItem = new ElementTreeItem(new RootElement((ComplexType) entry.getType()), null, false, false);
+				elementTreeItem.setChildSelector(new ChildSelector() {
+					@Override
+					public List<Element<?>> getChildren(ComplexType type) {
+						return getElements(model.getConfig().getType(), type);
+					}
+				});
+				display.rootProperty().set(elementTreeItem);
+				display.setClipboardHandler(new ElementClipboardHandler(display, false));
+				ElementSelectionListener elementSelectionListener = new ElementSelectionListener(MainController.getInstance(), false);
+				elementSelectionListener.setActualId(entry.getType().getId());
+				display.getSelectionModel().selectedItemProperty().addListener(elementSelectionListener);
+			}
 			
-			display.rootProperty().set(elementTreeItem);
 			display.getTreeCell(display.rootProperty().get()).expandedProperty().set(false);
 			display.addEventHandler(MouseEvent.MOUSE_CLICKED, clickHandler);
 			
 			child.getChildren().add(display);
 			
-//					Tree<Element<?>> display = structureGUIManager.display(controller, child, new RootElementWithPush((ComplexType) entry.getType(), true), entry.getType() instanceof Structure, false);
-			display.setClipboardHandler(new ElementClipboardHandler(display, false));
 			display.getRootCell().getNode().getStyleClass().add("invokeTree");
-			
-			ElementSelectionListener elementSelectionListener = new ElementSelectionListener(MainController.getInstance(), false);
-			elementSelectionListener.setActualId(entry.getType().getId());
-			display.getSelectionModel().selectedItemProperty().addListener(elementSelectionListener);
 			
 			// doesn't work in this context? the invoke wrapper isn't using it either
 			display.prefWidthProperty().unbind();
@@ -654,17 +722,6 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				});
 			}
 			
-			// hide buttons and stuff
-			Node lookup = child.lookup(".structure-all-buttons");
-			if (lookup != null) {
-				lookup.setVisible(false);
-				lookup.setManaged(false);
-			}
-			lookup = child.lookup(".structure-move-buttons");
-			if (lookup != null) {
-				lookup.setVisible(false);
-				lookup.setManaged(false);
-			}
 			return child;
 		} 
 		catch (Exception e) {
