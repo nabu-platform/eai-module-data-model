@@ -12,9 +12,11 @@ import be.nabu.libs.types.api.DefinedType;
 import be.nabu.libs.types.api.DefinedTypeRegistry;
 import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.SimpleType;
+import be.nabu.libs.types.api.SynchronizableTypeRegistry;
+import be.nabu.libs.types.api.Type;
 import be.nabu.libs.types.api.TypeRegistry;
 
-public class DataModelArtifact extends JAXBArtifact<DataModelConfiguration> implements DefinedTypeRegistry {
+public class DataModelArtifact extends JAXBArtifact<DataModelConfiguration> implements DefinedTypeRegistry, SynchronizableTypeRegistry {
 
 	private TypeRegistryImpl registry;
 	
@@ -86,6 +88,19 @@ public class DataModelArtifact extends JAXBArtifact<DataModelConfiguration> impl
 	@Override
 	public void setConfig(DataModelConfiguration config) {
 		super.setConfig(config);
+	}
+
+	@Override
+	public boolean isSynchronizable(Type type) {
+		List<DataModelEntry> entries = getConfig().getEntries();
+		if (entries != null) {
+			for (DataModelEntry entry : entries) {
+				if (type.equals(entry.getType())) {
+					return entry.isSynchronize();
+				}
+			}
+		}
+		return false;
 	}
 
 }

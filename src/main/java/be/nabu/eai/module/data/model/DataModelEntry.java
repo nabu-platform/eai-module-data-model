@@ -8,6 +8,7 @@ import be.nabu.libs.types.api.DefinedType;
 public class DataModelEntry {
 	private DefinedType type;
 	private int x, y;
+	private boolean synchronize = true;
 	@XmlJavaTypeAdapter(value = ArtifactXMLAdapter.class)
 	public DefinedType getType() {
 		return type;
@@ -26,5 +27,11 @@ public class DataModelEntry {
 	}
 	public void setY(int y) {
 		this.y = y;
+	}
+	public boolean isSynchronize() {
+		return synchronize;
+	}
+	public void setSynchronize(boolean synchronize) {
+		this.synchronize = synchronize;
 	}
 }
