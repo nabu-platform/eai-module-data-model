@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
 import javax.xml.bind.JAXBContext;
@@ -62,6 +63,8 @@ import be.nabu.libs.resources.api.WritableResource;
 import be.nabu.libs.resources.file.FileItem;
 import be.nabu.libs.resources.memory.MemoryDirectory;
 import be.nabu.libs.services.api.DefinedService;
+import be.nabu.libs.services.api.Service;
+import be.nabu.libs.services.api.ServiceException;
 import be.nabu.libs.services.api.ServiceResult;
 import be.nabu.libs.services.jdbc.JDBCUtils;
 import be.nabu.libs.types.TypeUtils;
@@ -83,6 +86,7 @@ import be.nabu.libs.validator.api.Validation;
 import be.nabu.utils.io.IOUtils;
 import be.nabu.utils.io.api.ByteBuffer;
 import be.nabu.utils.io.api.WritableContainer;
+import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
 import javafx.beans.property.SimpleBooleanProperty;
@@ -388,6 +392,30 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		
 		Button delete = new Button("Delete Selected");
 		Button export = new Button("Copy to clipboard (PNG)");
+		Button synchronize = new Button("Synchronize To Database");
+		synchronize.addEventHandler(ActionEvent.ANY, new EventHandler<ActionEvent>() {
+			@Override
+			public void handle(ActionEvent arg0) {
+				synchronize.setDisable(true);
+				MainController.getInstance().submitTask("Synchronizing model", "Synchronizing data model: " + model.getId(), new Runnable() {
+					@Override
+					public void run() {
+						synchronizeManagedTypes(new EventHandler<ActionEvent>() {
+							@Override
+							public void handle(ActionEvent arg0) {
+								Platform.runLater(new Runnable() {
+									@Override
+									public void run() {
+										synchronize.setDisable(false);
+										Confirm.confirm(ConfirmType.INFORMATION, "Synchronized tables", "Finished synchronizing tables to the database(s)", null);
+									}
+								});
+							}
+						});
+					}
+				});
+			}
+		});
 		
 		if (editable) {
 			delete.disableProperty().bind(locked.not());
@@ -427,7 +455,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		viewLabel.setPadding(new Insets(10, 10, 10, 0));
 		Separator separator = new Separator(Orientation.VERTICAL);
 		HBox.setMargin(separator, new Insets(0, 10, 0, 10));
-		buttons.getChildren().addAll(export, delete, separator, viewLabel, combo);
+		buttons.getChildren().addAll(export, delete, synchronize, separator, viewLabel, combo);
 		
 		total.getChildren().addAll(buttons, scroll);
 		
@@ -492,6 +520,40 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		}
 		
 		toFront(null, null, shapes, drawn);
+	}
+	
+	private void synchronizeManagedTypes(EventHandler<ActionEvent> handler) {
+		for (DefinedService service : getDependendPools(model)) {
+			if (service != null) {
+				try {
+					synchronizeManagedTypes(service);
+				}
+				catch (Exception e) {
+					Platform.runLater(new Runnable() {
+						@Override
+						public void run() {
+							MainController.getInstance().notify(e);
+						}
+					});
+				}
+			}
+		}
+		handler.handle(null);
+	}
+	
+	// shameless copy of jdbc pools, but don't want a dependency...
+	private void synchronizeManagedTypes(Artifact artifact) throws InterruptedException, ExecutionException, ServiceException {
+		Service service = (Service) EAIResourceRepository.getInstance().resolve("nabu.protocols.jdbc.pool.Services.synchronizeManagedTypes");
+		if (service != null) {
+			ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
+			input.set("jdbcPoolId", artifact.getId());
+			input.set("force", true);
+			Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+			ServiceResult serviceResult = run.get();
+			if (serviceResult.getException() != null) {
+				throw serviceResult.getException();
+			}
+		}
 	}
 
 	private void drawShapes(DataModelArtifact model, Map<String, VBox> drawn, Map<String, List<Node>> shapes, AnchorPane canvas, List<DataModelEntry> entries) {
@@ -1000,22 +1062,32 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		});
 	}
 	
+	// very lame method because we want effectively final...
+	private List<Node> ensure(List<Node> node) {
+		return node == null ? new ArrayList<Node>() : node;
+	}
+	
 	private void delete(DataModelArtifact model, AnchorPane canvas, ObjectProperty<Pane> focused, Map<String, VBox> drawn, Map<String, List<Node>> shapes) {
 		DataModelEntry entry = (DataModelEntry) focused.get().getUserData();
 		String id = entry.getType().getId();
 		model.getConfig().getEntries().remove(entry);
 		MainController.getInstance().setChanged();
 		focused.set(null);
-		VBox remove = drawn.remove(entry.getType().getId());
-		canvas.getChildren().remove(remove);
 		
-		List<Node> removed = shapes.remove(entry.getType().getId());
-		if (removed != null) {
-			canvas.getChildren().removeAll(removed);
+		List<Node> removed = ensure(shapes.remove(entry.getType().getId()));
+		VBox remove = drawn.remove(entry.getType().getId());
+		if (remove != null) {
+			removed.add(0, remove);
 		}
 
 		Entry child = model.getRepository().getEntry(id);
 		if (child.getParent() instanceof RepositoryEntry) {
+			EventHandler<ActionEvent> cancelHandler = new EventHandler<ActionEvent>() {
+				@Override
+				public void handle(ActionEvent arg0) {
+					canvas.getChildren().removeAll(removed);
+				}
+			};
 			Confirm.confirm(ConfirmType.QUESTION, "Delete structure?", "Do you want to delete the underlying data type as well?", new EventHandler<ActionEvent>() {
 				@Override
 				public void handle(ActionEvent arg0) {
@@ -1025,15 +1097,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					String collectionName = ValueUtils.getValue(CollectionNameProperty.getInstance(), entry.getType().getProperties());
 					// if we are synchronizing it to a data source provider, delete it
 					if (entry.isSynchronize() && collectionName != null) {
-						List<String> dependencies = model.getRepository().getDependencies(model.getId());
-						List<DefinedService> services = new ArrayList<DefinedService>();
-						for (String dependency : dependencies) {
-							Artifact resolve = model.getRepository().resolve(dependency);
-							// we assume that a datsource provider that is also a service is basically a jdbcpoolartifact or something compatible...
-							if (resolve instanceof DataSourceProviderArtifact && resolve instanceof DefinedService) {
-								services.add((DefinedService) resolve);
-							}
-						}
+						List<DefinedService> services = getDependendPools(model);
 						if (!services.isEmpty()) {
 							Confirm.confirm(ConfirmType.QUESTION, "Delete table(s)?", "Do you want to delete the underlying table(s) as well?", new EventHandler<ActionEvent>() {
 								@Override
@@ -1052,13 +1116,34 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 											MainController.getInstance().notify(e);
 										}
 									}
+									canvas.getChildren().removeAll(removed);
 								}
-							});
+							}, cancelHandler);
+						}
+						else {
+							canvas.getChildren().removeAll(removed);
 						}
 					}
 				}
-			});
+
+			}, cancelHandler);
 		}
+		else {
+			canvas.getChildren().removeAll(removed);
+		}
+	}
+	
+	private List<DefinedService> getDependendPools(DataModelArtifact model) {
+		List<String> dependencies = model.getRepository().getDependencies(model.getId());
+		List<DefinedService> services = new ArrayList<DefinedService>();
+		for (String dependency : dependencies) {
+			Artifact resolve = model.getRepository().resolve(dependency);
+			// we assume that a datsource provider that is also a service is basically a jdbcpoolartifact or something compatible...
+			if (resolve instanceof DataSourceProviderArtifact && resolve instanceof DefinedService) {
+				services.add((DefinedService) resolve);
+			}
+		}
+		return services;
 	}
 	
 	public static Line getLine(Map<String, VBox> drawn, String fromId, String toId, Pane from, Pane to) {
