@@ -9,6 +9,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
 
@@ -25,6 +26,7 @@ import be.nabu.eai.developer.components.RepositoryBrowser;
 import be.nabu.eai.developer.impl.CustomTooltip;
 import be.nabu.eai.developer.managers.base.BaseArtifactGUIInstance;
 import be.nabu.eai.developer.managers.base.BaseJAXBGUIManager;
+import be.nabu.eai.developer.managers.util.ElementLineConnectListener;
 import be.nabu.eai.developer.managers.util.ElementMarshallable;
 import be.nabu.eai.developer.managers.util.MovablePane;
 import be.nabu.eai.developer.managers.util.RootElementWithPush;
@@ -49,6 +51,7 @@ import be.nabu.eai.repository.util.SystemPrincipal;
 import be.nabu.jfx.control.tree.Tree;
 import be.nabu.jfx.control.tree.TreeCell;
 import be.nabu.jfx.control.tree.drag.TreeDragDrop;
+import be.nabu.jfx.control.tree.drag.TreeDropListener;
 import be.nabu.libs.artifacts.api.Artifact;
 import be.nabu.libs.artifacts.api.DataSourceProviderArtifact;
 import be.nabu.libs.property.ValueUtils;
@@ -67,6 +70,8 @@ import be.nabu.libs.services.api.Service;
 import be.nabu.libs.services.api.ServiceException;
 import be.nabu.libs.services.api.ServiceResult;
 import be.nabu.libs.services.jdbc.JDBCUtils;
+import be.nabu.libs.types.ComplexContentWrapperFactory;
+import be.nabu.libs.types.DefinedTypeResolverFactory;
 import be.nabu.libs.types.TypeUtils;
 import be.nabu.libs.types.api.ComplexContent;
 import be.nabu.libs.types.api.ComplexType;
@@ -74,18 +79,28 @@ import be.nabu.libs.types.api.DefinedType;
 import be.nabu.libs.types.api.DefinedTypeRegistry;
 import be.nabu.libs.types.api.Element;
 import be.nabu.libs.types.api.ModifiableType;
+import be.nabu.libs.types.api.SimpleType;
 import be.nabu.libs.types.api.Type;
+import be.nabu.libs.types.base.ComplexElementImpl;
 import be.nabu.libs.types.base.RootElement;
 import be.nabu.libs.types.base.ValueImpl;
+import be.nabu.libs.types.mask.MaskedContent;
 import be.nabu.libs.types.properties.CollectionNameProperty;
 import be.nabu.libs.types.properties.ForeignKeyProperty;
 import be.nabu.libs.types.properties.LabelProperty;
+import be.nabu.libs.types.properties.MaxOccursProperty;
+import be.nabu.libs.types.properties.MinOccursProperty;
+import be.nabu.libs.types.properties.PrimaryKeyProperty;
+import be.nabu.libs.types.simple.Date;
 import be.nabu.libs.types.structure.DefinedStructure;
 import be.nabu.libs.types.structure.Structure;
+import be.nabu.libs.types.structure.StructureInstance;
 import be.nabu.libs.validator.api.Validation;
+import be.nabu.libs.validator.api.ValidationMessage.Severity;
 import be.nabu.utils.io.IOUtils;
 import be.nabu.utils.io.api.ByteBuffer;
 import be.nabu.utils.io.api.WritableContainer;
+import be.nabu.utils.mime.impl.FormatException;
 import javafx.application.Platform;
 import javafx.beans.property.BooleanProperty;
 import javafx.beans.property.ObjectProperty;
@@ -105,10 +120,12 @@ import javafx.scene.control.Button;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.Label;
+import javafx.scene.control.ProgressIndicator;
 import javafx.scene.control.ScrollPane;
 import javafx.scene.control.ScrollPane.ScrollBarPolicy;
 import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
+import javafx.scene.control.Tab;
 import javafx.scene.control.TextField;
 import javafx.scene.image.WritableImage;
 import javafx.scene.input.DragEvent;
@@ -140,6 +157,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 	// any pending changes because of update actions
 	private List<DefinedType> pendingChanges = new ArrayList<DefinedType>();
 	private boolean canBeSynchronized;
+	private AnchorPane canvas;
 	
 	public DataModelGUIManager() {
 		super("Data Model", DataModelArtifact.class, new DataModelManager(), DataModelConfiguration.class);
@@ -239,6 +257,11 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				canBeSynchronized = true;
 			}
 		}
+		// when you are defining data models that are to be used by other jdbc connections, you might not see it in dependencies
+		// you still might need to tweak the behavior of what gets synced and what doesn't
+		// so we set it to true always!
+		canBeSynchronized = true;
+		
 		this.pane = pane;
 		this.model = model;
 		pane.getChildren().clear();
@@ -272,7 +295,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		Map<String, VBox> drawn = new HashMap<String, VBox>();
 		Map<String, List<Node>> shapes = new HashMap<String, List<Node>>();
 		
-		AnchorPane canvas = new AnchorPane();
+		canvas = new AnchorPane();
 		scroll.setContent(canvas);
 		canvas.minHeightProperty().bind(scroll.heightProperty().subtract(25));
 		
@@ -379,7 +402,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				Structure structure = new Structure();
 				structure.setName("unnamed");
 				try {
-					promptCreate(model, Arrays.asList(structure), false);
+					promptCreate(model, Arrays.asList(structure), false, null);
 				}
 				catch (Exception e) {
 					MainController.getInstance().notify(e);
@@ -407,7 +430,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 									@Override
 									public void run() {
 										synchronize.setDisable(false);
-										Confirm.confirm(ConfirmType.INFORMATION, "Synchronized tables", "Finished synchronizing tables to the database(s)", null);
+										MainController.getInstance().getNotificationHandler().notify("Synchronized the tables to the database(s)", 5000l, Severity.INFO);
 									}
 								});
 							}
@@ -926,7 +949,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 							@Override
 							public void handle(MouseEvent arg0) {
 								try {
-									promptCreate(model, Arrays.asList((Structure) entry.getType()), true);
+									promptCreate(model, Arrays.asList((Structure) entry.getType()), true, null);
 								}
 								catch (Exception e) {
 									MainController.getInstance().notify(e);
@@ -938,6 +961,51 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					}
 				}
 			}
+			
+			if (entry.getType() instanceof DefinedType) {
+				display.setId(((DefinedType) entry.getType()).getId());
+			}
+			
+			TreeDragDrop.makeDraggable(display, new ElementLineConnectListener(canvas));
+			TreeDragDrop.makeDroppable(display, new TreeDropListener<Element<?>>() {
+				@Override
+				public boolean canDrop(String dataType, TreeCell<Element<?>> target, TreeCell<?> dragged, TransferMode transferMode) {
+					// can not drop on our own tree
+					if (dragged.getTree().equals(display)) {
+						return false;
+					}
+					// if the tree does not have an id, we can't drop a line to it (don't know which type)
+					else if (target.getTree().getId() == null) {
+						return false;
+					}
+					// currently we only allow dropping on primary keys (for foreign keys)
+					Element<?> element = target.getItem().itemProperty().get();
+					Value<Boolean> primaryKey = element.getProperty(PrimaryKeyProperty.getInstance());
+					return primaryKey != null && primaryKey.getValue() != null && primaryKey.getValue();
+				}
+				@Override
+				public void drop(String dataType, TreeCell<Element<?>> target, TreeCell<?> dragged, TransferMode transferMode) {
+					Element<?> element = (Element<?>) dragged.getItem().itemProperty().get();
+					element.setProperty(new ValueImpl<String>(ForeignKeyProperty.getInstance(), target.getTree().getId() + ":" + target.getItem().itemProperty().get().getName()));
+					MainController.getInstance().setChanged();
+					display(MainController.getInstance(), pane, model);
+				}
+			});
+			
+			List<DefinedService> dependendPools = getDependendPools(model);
+			if (dependendPools.size() == 1) {
+				Label browse = new Label();
+				browse.setGraphic(MainController.loadFixedSizeGraphic("icons/search.png", 12));
+				browse.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
+					@Override
+					public void handle(MouseEvent arg0) {
+						browse(entry.getType().getId(), dependendPools.get(0).getId());
+					}
+				});
+				HBox.setMargin(browse, new Insets(5));
+				buttons.getChildren().add(0, browse);
+			}
+			
 			Label open = new Label();
 			open.setGraphic(MainController.loadFixedSizeGraphic("right-chevron.png", 12));
 			open.addEventHandler(MouseEvent.MOUSE_CLICKED, new EventHandler<MouseEvent>() {
@@ -1081,7 +1149,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		}
 
 		Entry child = model.getRepository().getEntry(id);
-		if (child.getParent() instanceof RepositoryEntry) {
+		if (child != null && child.getParent() instanceof RepositoryEntry) {
 			EventHandler<ActionEvent> cancelHandler = new EventHandler<ActionEvent>() {
 				@Override
 				public void handle(ActionEvent arg0) {
@@ -1091,38 +1159,47 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			Confirm.confirm(ConfirmType.QUESTION, "Delete structure?", "Do you want to delete the underlying data type as well?", new EventHandler<ActionEvent>() {
 				@Override
 				public void handle(ActionEvent arg0) {
-					((RepositoryEntry) child.getParent()).removeChildren(child.getName());
-					EAIDeveloperUtils.deleted(child.getId());
-					
-					String collectionName = ValueUtils.getValue(CollectionNameProperty.getInstance(), entry.getType().getProperties());
-					// if we are synchronizing it to a data source provider, delete it
-					if (entry.isSynchronize() && collectionName != null) {
-						List<DefinedService> services = getDependendPools(model);
-						if (!services.isEmpty()) {
-							Confirm.confirm(ConfirmType.QUESTION, "Delete table(s)?", "Do you want to delete the underlying table(s) as well?", new EventHandler<ActionEvent>() {
-								@Override
-								public void handle(ActionEvent arg0) {
-									for (DefinedService service : services) {
-										ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
-										input.set("sql", "drop table " + NamingConvention.UNDERSCORE.apply(collectionName));
-										Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
-										try {
-											ServiceResult serviceResult = run.get();
-											if (serviceResult.getException() != null) {
-												MainController.getInstance().notify(serviceResult.getException());
+					try {
+						EAIDeveloperUtils.delete(child.getId());
+						// if we are synchronizing it to a data source provider, delete it
+						if (entry.isSynchronize()) {
+							List<DefinedService> services = getDependendPools(model);
+							if (!services.isEmpty()) {
+								Confirm.confirm(ConfirmType.QUESTION, "Delete table(s)?", "Do you want to delete the underlying table(s) as well?", new EventHandler<ActionEvent>() {
+									@Override
+									public void handle(ActionEvent arg0) {
+										String collectionName = ValueUtils.getValue(CollectionNameProperty.getInstance(), entry.getType().getProperties());
+										if (collectionName == null) {
+											collectionName = entry.getType().getName();
+										}
+										for (DefinedService service : services) {
+											ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
+											input.set("sql", "drop table " + NamingConvention.UNDERSCORE.apply(collectionName));
+											Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+											try {
+												ServiceResult serviceResult = run.get();
+												if (serviceResult.getException() != null) {
+													MainController.getInstance().notify(serviceResult.getException());
+												}
+											}
+											catch (Exception e) {
+												MainController.getInstance().notify(e);
 											}
 										}
-										catch (Exception e) {
-											MainController.getInstance().notify(e);
-										}
+										canvas.getChildren().removeAll(removed);
 									}
-									canvas.getChildren().removeAll(removed);
-								}
-							}, cancelHandler);
+								}, cancelHandler);
+							}
+							else {
+								canvas.getChildren().removeAll(removed);
+							}
 						}
 						else {
 							canvas.getChildren().removeAll(removed);
 						}
+					}
+					catch (Exception e) {
+						MainController.getInstance().notify(e);
 					}
 				}
 
@@ -1224,7 +1301,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		return popup;
 	}
 	
-	public void promptCreate(DataModelArtifact model, List<Structure> types, boolean update) throws IOException, ParseException {
+	public void promptCreate(DataModelArtifact model, List<Structure> types, boolean update, ResultHandler resultHandler) throws IOException, ParseException {
 		if (types != null && !types.isEmpty()) {
 			VBox root = new VBox();
 			root.getStyleClass().addAll("project", "popup-form");
@@ -1255,11 +1332,15 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			root.getChildren().add(scroll);
 			VBox.setVgrow(scroll, Priority.ALWAYS);
 			
-			Map<Structure, BooleanProperty> booleans = new HashMap<Structure, BooleanProperty>();
+			Map<Structure, BooleanProperty> addBooleans = new HashMap<Structure, BooleanProperty>();
+			Map<Structure, BooleanProperty> insertBooleans = new HashMap<Structure, BooleanProperty>();
 			for (Structure type : types) {
-				SimpleBooleanProperty value = hasMultiple && !update ? new SimpleBooleanProperty(true) : null;
-				booleans.put(type, value);
-				tiles.getChildren().add(promptCreate(model, type, value));
+				SimpleBooleanProperty add = hasMultiple && !update ? new SimpleBooleanProperty(true) : null;
+				addBooleans.put(type, add);
+				
+				SimpleBooleanProperty insert = resultHandler != null && resultHandler.hasData(type) ? new SimpleBooleanProperty(true) : null;
+				tiles.getChildren().add(promptCreate(model, type, add, insert));
+				insertBooleans.put(type, insert);
 			}
 			
 			HBox buttons = new HBox();
@@ -1272,9 +1353,10 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					Entry entry = model.getRepository().getEntry(model.getId());
 					Entry typesEntry = getTypesEntry((RepositoryEntry) entry.getParent());
 					if (typesEntry instanceof RepositoryEntry) {
+						Map<Structure, Entry> result = new HashMap<Structure, Entry>();
 						for (Structure structure : types) {
 							try {
-								if (booleans.get(structure) == null || booleans.get(structure).get()) {
+								if (addBooleans.get(structure) == null || addBooleans.get(structure).get()) {
 									String typeName = structure.getName();
 									int counter = 1;
 									while (typesEntry.getChild(typeName) != null) {
@@ -1284,11 +1366,18 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 									new StructureManager().saveContent(createNode, structure);
 									EAIDeveloperUtils.created(createNode.getId());
 									
+									boolean toInsert = false;
+									if (insertBooleans.get(structure) != null && insertBooleans.get(structure).get()) {
+										result.put(structure, createNode);
+										toInsert = true;
+									}
+									
 									// get the new structure so we can add it to our model!
 									DefinedType artifact = (DefinedType) createNode.getNode().getArtifact();
 									DataModelEntry dataModelEntry = new DataModelEntry();
 									dataModelEntry.setType(artifact);
-									dataModelEntry.setSynchronize(ValueUtils.getValue(CollectionNameProperty.getInstance(), structure.getProperties()) != null);
+									// if we want to insert the data, we definitely want to sync it
+									dataModelEntry.setSynchronize(toInsert || ValueUtils.getValue(CollectionNameProperty.getInstance(), structure.getProperties()) != null);
 									if (model.getConfig().getEntries() == null) {
 										model.getConfig().setEntries(new ArrayList<DataModelEntry>());
 									}
@@ -1301,6 +1390,9 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 							catch (Exception e) {
 								MainController.getInstance().notify(e);
 							}
+						}
+						if (resultHandler != null && !result.isEmpty()) {
+							resultHandler.handle(result);
 						}
 					}
 					hide(popup);
@@ -1368,7 +1460,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		return EAIDeveloperUtils.mkdir(parent, "types");
 	}
 	
-	public Node promptCreate(DataModelArtifact model, Structure type, BooleanProperty add) throws IOException, ParseException {
+	public Node promptCreate(DataModelArtifact model, Structure type, BooleanProperty add, BooleanProperty insert) throws IOException, ParseException {
 		VBox root = new VBox();
 		root.getStyleClass().addAll("section", "block");
 		root.setPadding(new Insets(10));
@@ -1495,16 +1587,228 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				}
 			}
 		});
+		if (insert != null) {
+			CheckBox insertBox = new CheckBox();
+			insertBox.setSelected(insert.get());
+			HBox insertBoxBox = EAIDeveloperUtils.newHBox("Import data", insertBox);
+			insertBoxBox.setPadding(new Insets(2));
+			insertBox.setSelected(insert.get());
+			insert.bind(insertBox.selectedProperty());
+			root.getChildren().add(insertBoxBox);
+		}
 		return root;
+	}
+	
+	public static interface ResultHandler {
+		public void handle(Map<Structure, Entry> result);
+		public boolean hasData(Structure structure);
 	}
 
 	@Override
-	public void generate(List<Structure> types) {
+	public void generate(Map<Structure, List<ComplexContent>> content) {
 		try {
-			this.promptCreate(model, types, false);
+			this.promptCreate(model, new ArrayList<Structure>(content.keySet()), false, new ResultHandler() {
+				@Override
+				public void handle(Map<Structure, Entry> result) {
+					List<DefinedService> dependendPools = getDependendPools(model);
+					// if we have exactly one pool dependant on this, we know where to sync, otherwise (in the future) we can give an option to choose, for now we just skip it
+					if (dependendPools.size() == 1) {
+						for (Structure structure : content.keySet()) {
+							Entry entry = result.get(structure);
+							if (entry != null) {
+								List<ComplexContent> list = content.get(structure);
+								if (list != null && !list.isEmpty()) {
+									// TODO
+									// call the synchronize with force
+									// once done, try to call the insert with the structures, not sure if this will work
+									MainController.getInstance().submitTask("Import data", "Importing data for: " + EAICollectionUtils.getPrettyName(entry), new Runnable() {
+										@Override
+										public void run() {
+											try {
+												// synchronous reload of the structure entry so it is definitely known by the server at this point
+												MainController.getInstance().getServer().getRemote().reload(entry.getId());
+												DefinedService service = (DefinedService) MainController.getInstance().getRepository().resolve("nabu.protocols.jdbc.pool.Services.synchronize");
+												if (service != null) {
+													ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
+													input.set("jdbcPoolId", dependendPools.get(0).getId());
+													input.set("force", true);
+													input.set("execute", true);
+													input.set("typeIds", Arrays.asList(entry.getId()));
+													
+													boolean canProceed = true;
+													Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+													ServiceResult serviceResult = run.get();
+													if (serviceResult.getException() != null) {
+														MainController.getInstance().notify(serviceResult.getException());
+													}
+													// ok, it was synchronized, let's move to insertion!
+													// we first mask all the content as the new type (in case the ids don't match or whatever)
+													else {
+														DefinedStructure structure = (DefinedStructure) entry.getNode().getArtifact();
+														List<ComplexContent> masked = new ArrayList<ComplexContent>();
+														Date date = new Date();
+														for (ComplexContent instance : list) {
+															MaskedContent maskedInstance = new MaskedContent(instance, structure);
+															for (Element<?> child : TypeUtils.getAllChildren(structure)) {
+																Value<Integer> minOccurs = child.getProperty(MinOccursProperty.getInstance());
+																// for mandatory values we do our best...
+																if ((minOccurs == null || minOccurs.getValue() > 0) && maskedInstance.get(child.getName()) == null) {
+																	Value<Boolean> property = child.getProperty(PrimaryKeyProperty.getInstance());
+																	Class<?> clazz = ((SimpleType<?>) child.getType()).getInstanceClass();
+																	if (property != null && property.getValue() != null && property.getValue()) {
+																		if (UUID.class.isAssignableFrom(clazz)) {
+																			maskedInstance.set(child.getName(), UUID.randomUUID());
+																		}
+																		else {
+																			MainController.getInstance().logDeveloperText("Can not set primary key " + child.getName() + " because type is not supported");
+																			canProceed = false;
+																		}
+																	}
+																	else if (Date.class.isAssignableFrom(clazz)) {
+																		maskedInstance.set(child.getName(), date);
+																	}
+																	else if (Boolean.class.isAssignableFrom(clazz)) {
+																		maskedInstance.set(child.getName(), false);
+																	}
+																	else {
+																		MainController.getInstance().logDeveloperText("Can not generate default value for mandatory " + child.getName() + " because type is not supported");
+																		canProceed = false;
+																	}
+																}
+															}
+															masked.add(maskedInstance);
+														}
+														if (canProceed) {
+															service = (DefinedService) MainController.getInstance().getRepository().resolve("nabu.services.jdbc.Services.insert");
+															if (service != null) {
+																input = service.getServiceInterface().getInputDefinition().newInstance();
+																input.set("connection", dependendPools.get(0).getId());
+																input.set("instances", masked);
+																run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+																serviceResult = run.get();
+																Platform.runLater(new Runnable() {
+																	@Override
+																	public void run() {
+																		// too annoying
+//																		Confirm.confirm(ConfirmType.INFORMATION, "Data imported", "The data has been successfully imported for: " + EAICollectionUtils.getPrettyName(entry), null);
+																		MainController.getInstance().getNotificationHandler().notify("The data has been successfully imported for: " + EAICollectionUtils.getPrettyName(entry), 3000l, Severity.INFO);
+																	}
+																});
+															}
+														}
+														else {
+															Platform.runLater(new Runnable() {
+																@Override
+																public void run() {
+																	Confirm.confirm(ConfirmType.WARNING, "Data not imported", "Can not insert partial data for: " + EAICollectionUtils.getPrettyName(entry), null);
+																}
+															});
+														}
+													}
+												}
+											}
+											catch (Exception e) {
+												MainController.getInstance().notify(e);
+											}
+										}
+									});
+								}
+							}
+						}
+					}
+				}
+				@Override
+				public boolean hasData(Structure structure) {
+					return content.get(structure) != null && !content.get(structure).isEmpty();
+				}
+			});
 		}
 		catch (Exception e) {
 			MainController.getInstance().notify(e);
+		}
+	}
+	
+	private void browse(String id, String poolId) {
+		DefinedService service = (DefinedService) MainController.getInstance().getRepository().resolve("nabu.services.jdbc.Services.select");
+		if (service != null) {
+			Tab tab = MainController.getInstance().newTab("Browsing " + EAICollectionUtils.getPrettyName(id));
+			HBox box = new HBox();
+			box.setAlignment(Pos.CENTER);
+			box.getChildren().add(new ProgressIndicator());
+			tab.setContent(box);
+			
+			MainController.getInstance().submitTask("Retrieving data", "Retrieving data for: " + EAICollectionUtils.getPrettyName(id), new Runnable() {
+				@Override
+				public void run() {
+					ComplexContent input = service.getServiceInterface().getInputDefinition().newInstance();
+					input.set("connection", poolId);
+					input.set("typeId", id);
+					input.set("limit", 1000);
+					Future<ServiceResult> run = EAIResourceRepository.getInstance().getServiceRunner().run(service, EAIResourceRepository.getInstance().newExecutionContext(SystemPrincipal.ROOT), input);
+					try {
+						ServiceResult serviceResult = run.get();
+						if (serviceResult.getException() != null) {
+							MainController.getInstance().notify(serviceResult.getException());
+							Platform.runLater(new Runnable() {
+								@Override
+								public void run() {
+									box.getChildren().clear();
+									Label failed = new Label("Could not retrieve data");
+									failed.getStyleClass().add("p");
+									box.getChildren().add(failed);
+								}
+							});
+						}
+						else {
+							ComplexContent output = serviceResult.getOutput();
+							if (output == null || output.get("select") == null || output.get("select/results") == null) {
+								Platform.runLater(new Runnable() {
+									@Override
+									public void run() {
+										box.getChildren().clear();
+										Label failed = new Label("No data available");
+										failed.getStyleClass().add("p");
+										box.getChildren().add(failed);
+									}
+								});
+							}
+							else {
+								Platform.runLater(new Runnable() {
+									@SuppressWarnings("unchecked")
+									@Override
+									public void run() {
+										Structure structure = new Structure();
+										structure.setName("resultList");
+										ComplexType targetType = (ComplexType) DefinedTypeResolverFactory.getInstance().getResolver().resolve(id);
+										structure.add(new ComplexElementImpl("results", targetType, null, 
+											new ValueImpl<Integer>(MaxOccursProperty.getInstance(), 0)));
+										
+										StructureInstance newInstance = structure.newInstance();
+										List list = (List) output.get("select/results");
+										if (list != null) {
+											for (int i = 0; i < list.size(); i++) {
+												Object content = list.get(i);
+												if (!(content instanceof ComplexContent)) {
+													content = ComplexContentWrapperFactory.getInstance().getWrapper().wrap(content);
+												}
+												newInstance.set("results[" + i + "]", new MaskedContent((ComplexContent) list.get(i), targetType));
+											}
+										}
+										
+										VBox target = new VBox();
+										MainController.getInstance().showContent(target, newInstance, null);
+										tab.setContent(target);
+									}
+								});
+							}
+						}
+					}
+					catch (Exception e) {
+						MainController.getInstance().notify(e);
+					}
+				}
+			});
+			
 		}
 	}
 }
