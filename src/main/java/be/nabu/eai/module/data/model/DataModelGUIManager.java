@@ -133,6 +133,7 @@ import javafx.scene.input.Dragboard;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.input.MouseEvent;
+import javafx.scene.input.ScrollEvent;
 import javafx.scene.input.TransferMode;
 import javafx.scene.layout.AnchorPane;
 import javafx.scene.layout.HBox;
@@ -143,6 +144,7 @@ import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
 import javafx.scene.shape.Line;
 import javafx.scene.shape.Shape;
+import javafx.scene.transform.Affine;
 import javafx.stage.Stage;
 
 public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfiguration, DataModelArtifact> implements TypeGeneratorTarget {
@@ -296,6 +298,30 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		Map<String, List<Node>> shapes = new HashMap<String, List<Node>>();
 		
 		canvas = new AnchorPane();
+		
+		canvas.addEventHandler(ScrollEvent.SCROLL, new EventHandler<ScrollEvent>() {
+			@Override
+			public void handle(ScrollEvent event) {
+				if (event.isControlDown()) {
+					double delta = event.getDeltaY();
+		            double adjust = delta / 1000.0;
+		            double zoom = Math.min(1, Math.max(0.3, canvas.getScaleX() + adjust));
+		            canvas.setScaleX(zoom);
+		            canvas.setScaleY(zoom);
+		            event.consume();
+				}
+			}
+		});
+		canvas.addEventHandler(KeyEvent.KEY_PRESSED, new EventHandler<KeyEvent>() {
+			@Override
+			public void handle(KeyEvent arg0) {
+				if (arg0.getCode() == KeyCode.DIGIT0 && arg0.isControlDown()) {
+					canvas.setScaleX(1);
+		            canvas.setScaleY(1);
+				}
+			}
+		});
+		
 		scroll.setContent(canvas);
 		canvas.minHeightProperty().bind(scroll.heightProperty().subtract(25));
 		
