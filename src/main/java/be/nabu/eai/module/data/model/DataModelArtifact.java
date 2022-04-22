@@ -5,6 +5,7 @@ import java.util.Set;
 
 import be.nabu.eai.repository.api.Repository;
 import be.nabu.eai.repository.artifacts.jaxb.JAXBArtifact;
+import be.nabu.libs.property.ValueUtils;
 import be.nabu.libs.resources.api.ResourceContainer;
 import be.nabu.libs.types.TypeRegistryImpl;
 import be.nabu.libs.types.api.ComplexType;
@@ -15,6 +16,7 @@ import be.nabu.libs.types.api.SimpleType;
 import be.nabu.libs.types.api.SynchronizableTypeRegistry;
 import be.nabu.libs.types.api.Type;
 import be.nabu.libs.types.api.TypeRegistry;
+import be.nabu.libs.types.properties.IdProperty;
 
 public class DataModelArtifact extends JAXBArtifact<DataModelConfiguration> implements DefinedTypeRegistry, SynchronizableTypeRegistry {
 
@@ -22,6 +24,26 @@ public class DataModelArtifact extends JAXBArtifact<DataModelConfiguration> impl
 	
 	public DataModelArtifact(String id, ResourceContainer<?> directory, Repository repository) {
 		super(id, directory, repository, "data-model.xml", DataModelConfiguration.class);
+	}
+	
+	@Override
+	public Type getTypeById(String id) {
+		List<DataModelEntry> entries = getConfig().getEntries();
+		if (entries != null) {
+			for (DataModelEntry entry : entries) {
+				DefinedType type = entry.getType();
+				if (type != null) {
+					String value = ValueUtils.getValue(IdProperty.getInstance(), type.getProperties());
+					if (value == null) {
+						value = type.getId();
+					}
+					if (id.equals(value)) {
+						return type;
+					}
+				}
+			}
+		}
+		return DefinedTypeRegistry.super.getTypeById(id);
 	}
 	
 	private TypeRegistry getRegistry() {

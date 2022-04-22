@@ -948,6 +948,7 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 			}
 			else {
 				display = new Tree<Element<?>>(new ElementMarshallable(), null, StructureGUIManager.newCellDescriptor());
+				display.setUserData(entry);
 				EAIDeveloperUtils.addElementExpansionHandler(display);
 				display.setClipboardHandler(new ElementClipboardHandler(display, false));
 				display.setReadOnly(true);
@@ -1013,6 +1014,10 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 				public void drop(String dataType, TreeCell<Element<?>> target, TreeCell<?> dragged, TransferMode transferMode) {
 					Element<?> element = (Element<?>) dragged.getItem().itemProperty().get();
 					element.setProperty(new ValueImpl<String>(ForeignKeyProperty.getInstance(), target.getTree().getId() + ":" + target.getItem().itemProperty().get().getName()));
+					
+					if (dragged.getTree().getUserData() instanceof DataModelEntry) {
+						pendingChanges.add(((DataModelEntry) dragged.getTree().getUserData()).getType());
+					}
 					MainController.getInstance().setChanged();
 					display(MainController.getInstance(), pane, model);
 				}
