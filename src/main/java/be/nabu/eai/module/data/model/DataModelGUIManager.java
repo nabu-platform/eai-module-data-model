@@ -86,6 +86,7 @@ import be.nabu.libs.types.base.RootElement;
 import be.nabu.libs.types.base.ValueImpl;
 import be.nabu.libs.types.mask.MaskedContent;
 import be.nabu.libs.types.properties.CollectionNameProperty;
+import be.nabu.libs.types.properties.CommentProperty;
 import be.nabu.libs.types.properties.ForeignKeyProperty;
 import be.nabu.libs.types.properties.LabelProperty;
 import be.nabu.libs.types.properties.MaxOccursProperty;
@@ -126,6 +127,7 @@ import javafx.scene.control.ScrollPane.ScrollBarPolicy;
 import javafx.scene.control.Separator;
 import javafx.scene.control.SplitPane;
 import javafx.scene.control.Tab;
+import javafx.scene.control.TextArea;
 import javafx.scene.control.TextField;
 import javafx.scene.image.WritableImage;
 import javafx.scene.input.DragEvent;
@@ -1602,6 +1604,18 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 		
 		Tree<Element<?>> display = structureGUIManager.display(MainController.getInstance(), treeDisplay, new RootElementWithPush(type, true), type instanceof Structure, false);
 		root.getChildren().add(treeDisplay);
+		
+		TextArea comment = new TextArea();
+		comment.setPromptText("Add a description...");
+		comment.setText(ValueUtils.getValue(CommentProperty.getInstance(), type.getProperties()));
+		root.getChildren().add(comment);
+		comment.textProperty().addListener(new ChangeListener<String>() {
+			@Override
+			public void changed(ObservableValue<? extends String> arg0, String arg1, String arg2) {
+				type.setProperty(new ValueImpl<String>(CommentProperty.getInstance(), arg1));
+			}
+		});
+		
 		String value = ValueUtils.getValue(CollectionNameProperty.getInstance(), type.getProperties());
 		if (value == null && type.getName() != null) {
 			value = NamingConvention.UNDERSCORE.apply(type.getName());
