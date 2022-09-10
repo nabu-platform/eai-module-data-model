@@ -633,7 +633,8 @@ public class DataModelGUIManager extends BaseJAXBGUIManager<DataModelConfigurati
 					String toId = property.getValue().split(":")[0];
 					if (drawn.containsKey(toId)) {
 						String fromPath = entry.getType().getName() + "/" + element.getName();
-						String toPath = ((DefinedType) model.getRepository().resolve(toId)).getName() + "/" + property.getValue().split(":")[1];
+						String[] split2 = property.getValue().split(":");
+						String toPath = ((DefinedType) model.getRepository().resolve(toId)).getName() + "/" + (split2.length >= 2 ? split2[1] : "id");
 						fromPath = element.getName();
 						toPath = property.getValue().split(":")[1];
 						drawLine(drawn, shapes, canvas, entry.getType(), toId, fromPath, toPath, "maskLine");
